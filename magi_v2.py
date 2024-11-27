@@ -1,5 +1,7 @@
 import numpy as np
 from scipy.special import kvp, gamma
+from sklearn.model_selection import KFold
+from scipy.interpolate import splrep, splev
 import tensorflow as tf
 import tf_keras
 import tensorflow_probability as tfp
@@ -77,11 +79,11 @@ class MAGI_v2:
     def initial_fit(self, discretization : int, verbose=False):
         
         # discretize our data
-        self.I, self.X_obs_discret = self.__discretize(self.ts_obs, self.X_obs, discretization)
+        self.I, self.X_obs_discret = self._discretize(self.ts_obs, self.X_obs, discretization)
         
         # compute |I| and beta (used for tempering prior vs. likelihood)
         self.mag_I = self.I.shape[0]
-        self.beta = (self.D * self.mag_I) / self.N_ds.sum()
+        self.beta = tf.cast((self.D * self.mag_I) / self.N_ds.sum(), tf.float64)
         
         '''
         Record where our NaNs are in the X_obs_discret in XLA-compatible format.
@@ -97,8 +99,8 @@ class MAGI_v2:
         #### FITTING KERNEL HYPERPARAMETERS FOR OBSERVED COMPONENTS
         
         # interpolate our fully/partially-observed components + fit (phi1, phi2, sigma_sq)
-        self.X_interp_obs = self.__linear_interpolate(self.X_obs_discret[:, self.observed_indicators])
-        hparams_obs = self.__fit_kernel_hparams(I=self.I, X_filled=self.X_interp_obs, verbose=verbose)
+        self.X_interp_obs = self._linear_interpolate(self.X_obs_discret[:, self.observed_indicators])
+        hparams_obs = self._fit_kernel_hparams(I=self.I, X_filled=self.X_interp_obs, verbose=verbose)
         
         # populate our hparams + initialize Xhat for the observed components
         self.phi1s[self.observed_indicators] = hparams_obs["phi1s"]
@@ -117,7 +119,7 @@ class MAGI_v2:
         for i, d in enumerate(self.observed_components):
 
             # Eqn. 6 of PNAS paper
-            C_d, m_d, K_d = self.__build_matrices(self.I, hparams_obs["phi1s"][i], hparams_obs["phi2s"][i], v=2.01)
+            C_d, m_d, K_d = self._build_matrices(self.I, hparams_obs["phi1s"][i], hparams_obs["phi2s"][i], v=2.01)
             self.C_d_invs[d] = tf.linalg.pinv(C_d) # pinv equal to inv if invertible!
             self.m_ds[d] = m_d
             self.K_d_invs[d] = tf.linalg.pinv(K_d)
@@ -179,9 +181,12 @@ class MAGI_v2:
             If some components unobs,
             1. Fit (thetas_init, X_unobs) jointly via gradient-matching. 
             2. Then, fit kernel hyperparameters.
+            
+            *11/26/2024: fix observed components at their cv-smoothed values!
             '''
             # fix the observed components at their interpolated values
-            Xhat_init_obs_tf = tf.convert_to_tensor(self.X_interp_obs)
+            X_smoothed_obs = self.cv_cubic_smoother(self.I, self.X_interp_obs)
+            Xhat_init_obs_tf = tf.convert_to_tensor(X_smoothed_obs)
             
             # create local version of f_vec, and assorted variables to ensure tf.function scope functionality.
             proper_order_local, I_local, f_vec_local = self.proper_order, self.I, self.f_vec
@@ -240,7 +245,7 @@ class MAGI_v2:
             self.thetas_init = thetas_var.numpy().copy()
             
             # fit kernel + sigma_sq hparams for unobserved components. Populate our model variables.
-            hparams_unobs = self.__fit_kernel_hparams(I=self.I, X_filled=self.X_interp_unobs, verbose=verbose)
+            hparams_unobs = self._fit_kernel_hparams(I=self.I, X_filled=self.X_interp_unobs, verbose=verbose)
             self.phi1s[self.unobserved_components] = hparams_unobs["phi1s"]
             self.phi2s[self.unobserved_components] = hparams_unobs["phi2s"]
             self.sigma_sqs_init[self.unobserved_components] = hparams_unobs["sigma_sqs"]
@@ -253,7 +258,7 @@ class MAGI_v2:
             for i, d in enumerate(self.unobserved_components):
         
                 # Eqn. 6 of PNAS paper
-                C_d, m_d, K_d = self.__build_matrices(self.I, hparams_unobs["phi1s"][i], hparams_unobs["phi2s"][i], v=2.01)
+                C_d, m_d, K_d = self._build_matrices(self.I, hparams_unobs["phi1s"][i], hparams_unobs["phi2s"][i], v=2.01)
                 self.C_d_invs[d] = tf.linalg.pinv(C_d) # pinv equal to inv if invertible!
                 self.m_ds[d] = m_d
                 self.K_d_invs[d] = tf.linalg.pinv(K_d)
@@ -264,6 +269,9 @@ class MAGI_v2:
             self.K_d_invs = tf.linalg.band_part(input=self.K_d_invs, num_lower=self.BANDSIZE, num_upper=self.BANDSIZE)
             self.m_ds = tf.linalg.band_part(input=self.m_ds, num_lower=self.BANDSIZE, num_upper=self.BANDSIZE)
         
+        # before we are ready to proceed with sampling, let's smooth our initial values for Xhat.
+        self.Xhat_init = self.cv_cubic_smoother(self.I, self.Xhat_init)
+        
     
     '''
     Function for sampling from posterior distribution to perform inference:
@@ -271,7 +279,7 @@ class MAGI_v2:
     2. Can specify number of burn-in + actual samples.
     '''
     # note that tqdm is not permissible because violates XLA-environment + tf.function.
-    def predict(self, num_results: int = 1000, num_burnin_steps: int = 1000, verbose=False):
+    def predict(self, num_results: int = 1000, num_burnin_steps: int = 1000, sigma_sqs_LB=None, verbose=False):
         
         # make sure we are ready to do inference (i.e., no NaNs in initializations)
         assert ~np.any(np.isnan(self.Xhat_init)), "Please make sure Xhat_init does not have NaNs."
@@ -283,14 +291,35 @@ class MAGI_v2:
         m_ds, K_d_invs, N_ds, not_nan_idxs = self.m_ds, self.K_d_invs, self.N_ds, self.not_nan_idxs
         y_tau_ds_observed, not_nan_cols, beta = self.y_tau_ds_observed, self.not_nan_cols, self.beta
         
+        # compute a lower bound on what sigma_sq should be for each component for numerical stability
+        if sigma_sqs_LB is None:
+            sigma_sqs_LB = ((self.Xhat_init.std(axis=0)) * 0.01) ** 2
+        
+        '''
+        As of 11/25/2024, we will use temperature annealing to encourage more initial exploration.
+        - Will also constrain sigma_sq values to be at least sigma_sq_LB using softplus bijector.
+        - Will also constrain theta values to be positive for now using softplus bijector.
+        '''
         # the FULL posterior distribution that we are sampling from (optimized for XLA, yay!)
-        def unnormalized_log_prob(X, sigma_sqs, thetas):
+        def unnormalized_log_prob(X, sigma_sqs_pre, thetas_pre, beta_temp):
             '''
             Takes in as input the following, and returns the unnormalized log-posterior
             1. Our samples of the trajectory components X with dimensions |I| x D
             2. sigma_sqs - a (|D|, ) vector of the noises on each component d.
             3. thetas - the (d_thetas,) vector-type sample of the parameters governing our system
             '''
+            
+            # compute what the actual sigma_sqs is, after softplus transformation
+            sigma_sqs = tf.math.log(1.0 + tf.math.exp(sigma_sqs_pre)) + sigma_sqs_LB
+            thetas = tf.math.log(1.0 + tf.math.exp(thetas_pre))
+            
+            # also need to account for the change-of-variables via log-Jacobian for both sigma^2 and thetas
+            log_jacobian_sigma_sqs = tf.reduce_sum(sigma_sqs_pre - tf.math.log(1.0 + tf.math.exp(sigma_sqs_pre)))
+            log_jacobian_thetas = tf.reduce_sum(thetas_pre - tf.math.log(1.0 + tf.math.exp(thetas_pre)))
+            
+            # need to tell TensorFlow to not track gradients on beta_temp
+            beta_temp = tf.stop_gradient(beta_temp)
+            
             # pre-compute our centered differences + reshape as needed
             X_cent = tf.reshape(X - mu_ds, shape=(X.shape[0], 1, X.shape[1]))
 
@@ -309,18 +338,43 @@ class MAGI_v2:
             X_observed = tf.gather(tf.reshape(X, [-1]), not_nan_idxs)
             t4 = tf.reduce_sum(tf.math.multiply(tf.square(X_observed - y_tau_ds_observed), 
                                                 tf.gather(1.0 / sigma_sqs, not_nan_cols)))
-
-            # temper using 1/beta: -0.5 * ( ((1/beta) * (t1 + t2)) + (t3 + t4) )
-            return -0.5 * ( ((1.0 / beta) * (t1 + t2)) + (t3 + t4) )
+            
+            # prior-temper using 1/beta: -0.5 * ( ((1/beta) * (t1 + t2)) + (t3 + t4) ), then annealing-tempering.
+            return beta_temp * ( -0.5 * ( ((1.0 / beta) * (t1 + t2)) + (t3 + t4)) + log_jacobian_sigma_sqs + log_jacobian_thetas)
         
-        # create our NUTS sampler with dual step-size adaptation
-        nuts_kernel = tfp.mcmc.NoUTurnSampler(target_log_prob_fn=unnormalized_log_prob, step_size=0.1)
-        adaptive_sampler = tfp.mcmc.DualAveragingStepSizeAdaptation(inner_kernel=nuts_kernel, 
-                                                                    num_adaptation_steps=int(0.8 * num_burnin_steps),
-                                                                    target_accept_prob=0.75)
         
-        # set up our initial state, i.e., our current state
-        initial_state = [self.Xhat_init, self.sigma_sqs_init, self.thetas_init]
+        # need to create a helper function to let NUTS know it's a 3-variable input.
+        def init_tempered_log_prob(X, sigma_sqs_pre, thetas, beta_temp):
+            return unnormalized_log_prob(X, sigma_sqs_pre, thetas, beta_temp=beta_temp)
+        
+        # what should the initial beta_temp be?
+        beta_temp_init = logarithmic_temperature_schedule(step=0, min_temp=0.1)
+                                
+        # create our NUTS sampler with dual step-size adaptation (as the base)
+        adaptive_sampler = tfp.mcmc.DualAveragingStepSizeAdaptation(
+            inner_kernel=tfp.mcmc.NoUTurnSampler(
+                target_log_prob_fn=lambda X, sigma_sqs_pre, thetas : init_tempered_log_prob(X, sigma_sqs_pre, thetas,
+                                                                                            beta_temp=beta_temp_init), 
+                step_size=0.1),
+            num_adaptation_steps=int(0.8 * num_burnin_steps),
+            target_accept_prob=0.75)
+        
+        # wrap the above with our temperature-controlled custom kernel setup.
+        annealed_sampler = LogAnnealedNUTS(base_kernel=adaptive_sampler, 
+                                           num_steps=num_burnin_steps + num_results,
+                                           unnormalized_log_prob=unnormalized_log_prob)      
+        
+        # set up our initial state, i.e., our current state (note the softplus inverse bijection)
+        sigma_sqs_pre_init = np.full_like(a=self.sigma_sqs_init, fill_value=-5.0) # filling with something small by default.
+        sigma_sqs_pre_init[self.sigma_sqs_init > sigma_sqs_LB] = np.log(np.exp( (self.sigma_sqs_init - sigma_sqs_LB)
+                                                                                 [self.sigma_sqs_init > sigma_sqs_LB] ) - 1.0)
+        
+        # repeat the process for the theta_pre_inits
+        thetas_pre_init = np.full_like(a=self.thetas_init, fill_value=-5.0) # filling with something small by default.
+        thetas_pre_init[self.thetas_init > 0.0] = np.log(np.exp( (self.thetas_init - 0.0)[self.thetas_init > 0.0] ) - 1.0)
+        
+        # fill our initial state with our pre-transformed values
+        initial_state = [self.Xhat_init, sigma_sqs_pre_init, thetas_pre_init]
         
         # accelerated sampling.
         @tf.function(autograph=True, jit_compile=True)
@@ -329,7 +383,7 @@ class MAGI_v2:
                 num_results=num_results,
                 num_burnin_steps=num_burnin_steps,
                 current_state=initial_state,
-                kernel=adaptive_sampler,
+                kernel=annealed_sampler,
                 trace_fn=lambda _, pkr: pkr
             )
             return samples, kernel_results
@@ -354,8 +408,10 @@ class MAGI_v2:
                    "thetas_init" : self.thetas_init, 
                    "I" : self.I, 
                    "X_samps" : samples[0].numpy(), 
-                   "sigma_sqs_samps" : samples[1].numpy(), 
-                   "thetas_samps" : samples[2].numpy(),
+                   "sigma_sqs_samps" : np.log(np.exp(samples[1].numpy()) + 1.0) + sigma_sqs_LB, 
+                   "thetas_samps" : np.log(np.exp(samples[2].numpy()) + 1.0),
+                   "kernel_results" : kernel_results,
+                   "sample_results" : samples,
                    "minutes_elapsed" : minutes}
         
         # return our results package
@@ -373,7 +429,7 @@ class MAGI_v2:
         self.I = I_new.reshape(-1, 1)
         self.phi1s, self.phi2s = phi1s_new.copy(), phi2s_new.copy()
         self.mag_I = self.I.shape[0]
-        self.beta = (self.D * self.mag_I) / self.N_ds.sum()
+        self.beta = tf.cast((self.D * self.mag_I) / self.N_ds.sum(), tf.float64)
         
         # create a temporary storage for the matrices to avoid EagerTensor errors
         C_d_invs = np.zeros(shape=(self.D, self.mag_I, self.mag_I))
@@ -382,7 +438,7 @@ class MAGI_v2:
         
         # go component-by-component
         for d in range(self.D):
-            C_d, m_d, K_d = self.__build_matrices(self.I, self.phi1s[d], self.phi2s[d], v=2.01)
+            C_d, m_d, K_d = self._build_matrices(self.I, self.phi1s[d], self.phi2s[d], v=2.01)
             C_d_invs[d] = tf.linalg.pinv(C_d) # pinv equal to inv if invertible!
             m_ds[d] = m_d
             K_d_invs[d] = tf.linalg.pinv(K_d)
@@ -409,7 +465,7 @@ class MAGI_v2:
     - Returns I (vector of discretized timesteps) and X_obs_discret.
     '''
     # adds in 2^discret - 1 evenly-spaced timesteps between consecutive observations
-    def __discretize(self, ts_obs, X_obs, discretization):
+    def _discretize(self, ts_obs, X_obs, discretization):
         
         # making sure dimensions work out
         ts_obs = ts_obs.flatten()
@@ -443,7 +499,7 @@ class MAGI_v2:
     *Columns that were completely missing will still be completely missing!
     '''
     # linearly interpolating any NaNs in columns that are NOT completely NaNs.
-    def __linear_interpolate(self, X_partial):
+    def _linear_interpolate(self, X_partial):
         
         # get dimensions of our X_partial
         N_partial, D_partial = X_partial.shape
@@ -468,9 +524,11 @@ class MAGI_v2:
     Fits phi1, phi2, and sigma_sq_init hyperparameters given:
     1. I - discretized timesteps.
     2. X_filled - data matrix assuming each column is completely observed (i.e., interpolated).
+    
+    Returns: our (D_filled,) phi1s, phi2s, and sigma_sqs, as well as X_filled.shape smoothed values
     ''' 
     # fit (phi1, phi2, sigma_sq) for components in X_filled.
-    def __fit_kernel_hparams(self, I, X_filled, verbose=False):
+    def _fit_kernel_hparams(self, I, X_filled, verbose=False):
         
         #### 1. DATA-DRIVEN FOURIER-INFORMED PRIOR HYPERPARAMETERS
         
@@ -543,40 +601,38 @@ class MAGI_v2:
         '''
         # constructing a sampleable-object to pass into TFP optimization
         gpjm = tfd.JointDistributionNamed({"phi1s" : 
-                                           tfd.TruncatedNormal(loc=np.float64([0.] * D_filled), 
-                                                               low=np.float64([0.] * D_filled), 
+                                           tfd.TruncatedNormal(loc=np.float64([1e-4] * D_filled), 
+                                                               low=np.float64([1e-6] * D_filled), 
                                                                high=np.float64([np.inf] * D_filled),
                                                                scale=np.float64([1000.0 * np.sqrt(D_filled)]\
                                                                                 * D_filled)), # flat prior
                                            "sigma_sqs" : 
-                                           tfd.TruncatedNormal(loc=np.float64([0.] * D_filled), 
-                                                               low=np.float64([0.] * D_filled), 
+                                           tfd.TruncatedNormal(loc=np.float64( ((X_filled.std(axis=0)) * 0.1 ) ** 2), 
+                                                               low=np.float64([1e-6] * D_filled), 
                                                                high=np.float64([np.inf] * D_filled),
                                                                scale=np.float64([1000.0 * np.sqrt(D_filled)]\
                                                                                 * D_filled)), # flat prior
                                            "phi2s" : 
-                                           tfd.Normal(loc=np.float64(mu_phi2s), 
-                                                      scale=np.float64(sd_phi2s\
-                                                                       * np.sqrt(D_filled))), # Fourier-informed prior
+                                           tfd.TruncatedNormal(loc=np.float64(mu_phi2s), 
+                                                               low=np.float64([1e-6] * D_filled), 
+                                                               high=np.float64([np.inf] * D_filled),
+                                                               scale=np.float64(sd_phi2s\
+                                                                                * np.sqrt(D_filled))), # Fourier-informed prior
                                            "observations" : build_gps})
 
-
         # define our TO-BE-TRAINABLE variables + constrain them to be positive, and then make them positive.
-        phi1s_var = tfp.util.\
-        TransformedVariable(initial_value=X_filled.std(axis=0) ** 2, 
-                            bijector=tfp.bijectors.Softplus(), 
-                            name="phi1s",
-                            dtype=np.float64) # overall variance
-        phi2s_var = tfp.util.\
-        TransformedVariable(initial_value=mu_phi2s, 
-                            bijector=tfp.bijectors.Softplus(), 
-                            name="phi2s",
-                            dtype=np.float64) # bandwidth
-        sigma_sqs_var = tfp.util.\
-        TransformedVariable(initial_value=X_filled.std(axis=0) ** 2,
-                            bijector=tfp.bijectors.Softplus(), 
-                            name="sigma_sqs",
-                            dtype=np.float64) # noise
+        phi1s_var = tfp.util.TransformedVariable(initial_value=X_filled.std(axis=0) ** 2, 
+                                         bijector=tfp.bijectors.Softplus(), 
+                                         name="phi1s",
+                                         dtype=np.float64) # overall variance
+        phi2s_var = tfp.util.TransformedVariable(initial_value=mu_phi2s, 
+                                                 bijector=tfp.bijectors.Softplus(), 
+                                                 name="phi2s",
+                                                 dtype=np.float64) # bandwidth
+        sigma_sqs_var = tfp.util.TransformedVariable(initial_value=( (X_filled.std(axis=0)) * 0.1 ) ** 2, 
+                                                     bijector=tfp.bijectors.Softplus(), 
+                                                     name="sigma_sqs",
+                                                     dtype=np.float64) # noise
 
         # which variables are we attempting to fit?
         trainable_variables = [v.trainable_variables[0] for v in [phi1s_var, phi2s_var, sigma_sqs_var]]
@@ -601,7 +657,7 @@ class MAGI_v2:
           optimizer.apply_gradients(zip(grads, trainable_variables))
           return loss
         
-        # status-updates if verobse mode.
+        # status-updates if verbose mode.
         if verbose:
             
             # get a description + use TQDM
@@ -613,15 +669,102 @@ class MAGI_v2:
             # directly train for num_iters iterations.
             for i in range(num_iters):
                 loss = train_model()
-
+        
+        '''
+        # generate smoothed trajectories of this GP using the fitted phi1, phi2, sigma_sq values
+        - Note: 11/26/2024. GP smoothing without ODE information gets really poor looking trajectories ...
+        gps = build_gps(phi1s=phi1s_var._value().numpy(), 
+                        sigma_sqs=sigma_sqs_var._value().numpy(), 
+                        phi2s=phi2s_var._value().numpy())
+        X_filled_smoothed = gps.sample(1000)
+        '''
         # return as outputs our (D_filled,) phi1s, phi2s, and sigma_sqs
         return {"phi1s" : phi1s_var._value().numpy(),
                 "phi2s" : phi2s_var._value().numpy(),
                 "sigma_sqs" : sigma_sqs_var._value().numpy()}
         
+    
+    # for doing cross-validated cubic splines for smoother initial values (assumes no NaNs)
+    def cv_cubic_smoother(self, I, X_filled):
         
+        # only do this procedure if we have 10 or more observations
+        I = I.flatten()
+        if I.shape[0] < 10:
+            return X_filled
+        else:
+            return np.stack([self.single_cv_cubic_smoother(I, X_filled[:,i]) 
+                             for i in range(X_filled.shape[1])], axis=1)
+        
+        
+    # smoothing 1 component of our system.
+    def single_cv_cubic_smoother(self, I, x):
+        
+        # only do this procedure if we have 10 or more observations
+        I = I.flatten()
+        if I.shape[0] < 10:
+            return x
+
+        # create our cross-validated splits
+        kf = KFold(n_splits = 5, shuffle=True, random_state=1)
+
+        # how many possible knots do we have? (either no knots, or max. of 10 obs. per knot)
+        knot_nums = np.arange(0, (I.shape[0] // 10) +1)
+
+        # create a list to store error vectors for each split
+        split_errs = []
+
+        # do k-fold cross-validation on the number of knots
+        for train_idx, val_idx in kf.split(np.arange(I.shape[0])):
+
+            # create a list to store all of the errors for this fold.
+            knot_errs = []
+
+            # iterate thru our knots
+            for knot_num in knot_nums:
+
+                # where are we placing the knots?
+                if knot_num == 0:
+                    knot_positions = np.array([])
+                else:
+                    knot_positions = np.linspace(start=I[0], stop=I[-1], num=knot_num+2)[1:-1]
+
+                # fit our spline + evaluate the error on the validation set
+                tck = splrep(I[train_idx], x[train_idx], t=knot_positions, s=0)
+                preds = splev(I[val_idx], tck)
+                err = ((preds - x[val_idx]) ** 2).mean(); knot_errs.append(err)
+
+            # add to split_errs
+            split_errs.append(knot_errs)
+
+        # get our optimal number of knots
+        optimal_knot_num = knot_nums[np.array(split_errs).mean(axis=0).argmin()]
+
+        # fit cubic spline using these knots
+        if knot_num == 0:
+            knot_positions = np.array([])
+        else:
+            knot_positions = np.linspace(start=I[0], stop=I[-1], num=knot_num+2)[1:-1]
+
+        # fit our cubic spline on the full data    
+        tck = splrep(I, x, t=knot_positions, s=0)
+        smoothed = splev(I, tck)
+
+        # fit cubic spline using these knots
+        if knot_num == 0:
+            knot_positions = np.array([])
+        else:
+            knot_positions = np.linspace(start=I[0], stop=I[-1], num=knot_num+2)[1:-1]
+
+        # fit our cubic spline on the full data    
+        tck = splrep(I, x, t=knot_positions, s=0)
+        x_smoothed = splev(I, tck)
+
+        # return the smoothed trajectory
+        return x_smoothed
+    
+    
     # take in timesteps I + hparams (phi1, phi2, v) and returns (C_d, m_d, K_d) for a given component dim
-    def __build_matrices(self, I, phi1, phi2, v=2.01):
+    def _build_matrices(self, I, phi1, phi2, v=2.01):
         '''
         Takes in discretized timesteps I and hparams (phi1, phi2, v). Returns (C_d, m_d, K_d) for component d.
         - I is an np.array of discretized timesteps, phi1 & phi2 are floats.
@@ -671,3 +814,69 @@ class MAGI_v2:
 
         # 6. return our three matrices
         return C_d, m_d, K_d
+    
+'''
+Inputs:
+1. step - i.e., which step of sampling are we on?
+2. min_temp - what is the minimum temperature?
+
+*Returns the multiplier we will place on our log-posterior for temperature control ("beta_temp")
+'''
+# helper functions for implementing logarithmic decay tempering of log-posterior
+def logarithmic_temperature_schedule(step : Union[int, tf.Tensor], min_temp : float = 0.1):
+    step, min_temp = tf.cast(step, tf.float64), tf.cast(min_temp, tf.float64)
+    return tf.maximum(1.0 / tf.math.log(step + 2.0), min_temp)
+
+# custom kernel based on NUTS that allows for logarithm annealing of log-posterior.
+class LogAnnealedNUTS(tfp.mcmc.TransitionKernel):
+    
+    # standard constructor
+    def __init__(self, base_kernel, num_steps, unnormalized_log_prob, min_temp=0.1):
+        
+        # will be inheriting NUTS + DualAveragingStepSizeAdaptation combination.
+        self.base_kernel = base_kernel # will end up being adaptive_sampler
+        self.num_steps = num_steps
+        self.unnormalized_log_prob = unnormalized_log_prob
+        self.min_temp = min_temp
+        self.current_step = tf.Variable(0, dtype=tf.int32)  # Keep track of steps
+
+        
+    # custom function to perform one step of the sampling process
+    def one_step(self, current_state, previous_kernel_results):
+        
+        # update beta_temp dynamically using our log-temp scheduler function
+        beta_temp = logarithmic_temperature_schedule(self.current_step, self.min_temp)
+        self.current_step.assign_add(1)  # Increment the step counter
+
+        # make the function accessible
+        unnormalized_log_prob = self.unnormalized_log_prob
+        
+        # wrapper for the log-posterior function to account for sampling parameters + temperature.
+        def tempered_log_prob(*args):
+            return unnormalized_log_prob(*args, beta_temp=beta_temp)
+
+        # need to update the base inner NUTS sampler with this modified log-prob sampler to account for temperature
+        inner_kernel = tfp.mcmc.NoUTurnSampler(
+            target_log_prob_fn=tempered_log_prob,
+            step_size=self.base_kernel.inner_kernel.step_size  # Using the current step size
+        )
+
+        # create new DualAveraging wrapper preserving the old settings
+        self.base_kernel = tfp.mcmc.DualAveragingStepSizeAdaptation(
+            inner_kernel=inner_kernel,
+            num_adaptation_steps=self.base_kernel.num_adaptation_steps,
+            target_accept_prob=self.base_kernel.parameters["target_accept_prob"]
+        )
+        
+        # take one step of this new base kernel.
+        return self.base_kernel.one_step(current_state, previous_kernel_results)
+
+    
+    # need to define this function get the kernel results for compatibility with DualStepSizeAdaptation, etc.
+    def bootstrap_results(self, current_state):
+        return self.base_kernel.bootstrap_results(current_state)
+
+    
+    # inherited function that checks if chain has converged.
+    def is_calibrated(self):
+        return self.base_kernel.is_calibrated()
