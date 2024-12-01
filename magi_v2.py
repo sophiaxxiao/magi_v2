@@ -279,7 +279,7 @@ class MAGI_v2:
     2. Can specify number of burn-in + actual samples.
     '''
     # note that tqdm is not permissible because violates XLA-environment + tf.function.
-    def predict(self, num_results: int = 1000, num_burnin_steps: int = 1000, sigma_sqs_LB=None, verbose=False):
+    def predict(self, num_results: int = 1000, num_burnin_steps: int = 1000, sigma_sqs_LB=None, tempering=False, verbose=False):
         
         # make sure we are ready to do inference (i.e., no NaNs in initializations)
         assert ~np.any(np.isnan(self.Xhat_init)), "Please make sure Xhat_init does not have NaNs."
@@ -296,7 +296,7 @@ class MAGI_v2:
             sigma_sqs_LB = ((self.Xhat_init.std(axis=0)) * 0.01) ** 2
         
         '''
-        As of 11/25/2024, we will use temperature annealing to encourage more initial exploration.
+        As of 11/25/2024, we will use optional temperature annealing to encourage more initial exploration.
         - Will also constrain sigma_sq values to be at least sigma_sq_LB using softplus bijector.
         - Will also constrain theta values to be positive for now using softplus bijector.
         '''
@@ -343,7 +343,11 @@ class MAGI_v2:
             return beta_temp * ( -0.5 * ( ((1.0 / beta) * (t1 + t2)) + (t3 + t4)) + log_jacobian_sigma_sqs + log_jacobian_thetas)
         
         
-        # need to create a helper function to let NUTS know it's a 3-variable input.
+        # wrapper function if not doing any log-posterior tempering
+        def unnormalized_log_prob_no_temp(X, sigma_sqs_pre, thetas_pre):
+            return unnormalized_log_prob(X, sigma_sqs_pre, thetas_pre, beta_temp=1.0)
+        
+        # need to create a helper function to let NUTS know initially it's a 3-variable input.
         def init_tempered_log_prob(X, sigma_sqs_pre, thetas, beta_temp):
             return unnormalized_log_prob(X, sigma_sqs_pre, thetas, beta_temp=beta_temp)
         
@@ -359,10 +363,19 @@ class MAGI_v2:
             num_adaptation_steps=int(0.8 * num_burnin_steps),
             target_accept_prob=0.75)
         
-        # wrap the above with our temperature-controlled custom kernel setup.
-        annealed_sampler = LogAnnealedNUTS(base_kernel=adaptive_sampler, 
-                                           num_steps=num_burnin_steps + num_results,
-                                           unnormalized_log_prob=unnormalized_log_prob)      
+        # initialize our final sampler based on whether we are doing log-tempering or not
+        if tempering:
+        
+            # wrap the above with our temperature-controlled custom kernel setup.
+            final_sampler = LogAnnealedNUTS(base_kernel=adaptive_sampler, 
+                                            num_steps=num_burnin_steps + num_results,
+                                            unnormalized_log_prob=unnormalized_log_prob)  
+        
+        # just use standard NUTS + DualAveraging Step-Size Adaptation
+        else:
+            
+            # keep it as the same
+            final_sampler = adaptive_sampler
         
         # set up our initial state, i.e., our current state (note the softplus inverse bijection)
         sigma_sqs_pre_init = np.full_like(a=self.sigma_sqs_init, fill_value=-5.0) # filling with something small by default.
@@ -383,7 +396,7 @@ class MAGI_v2:
                 num_results=num_results,
                 num_burnin_steps=num_burnin_steps,
                 current_state=initial_state,
-                kernel=annealed_sampler,
+                kernel=final_sampler,
                 trace_fn=lambda _, pkr: pkr
             )
             return samples, kernel_results
@@ -404,8 +417,11 @@ class MAGI_v2:
         # package everything into a dictionary as output
         results = {"phi1s" : self.phi1s, "phi2s" : self.phi2s, 
                    "Xhat_init" : self.Xhat_init, 
-                   "sigma_sqs_init" : self.sigma_sqs_init, 
-                   "thetas_init" : self.thetas_init, 
+                   "sigma_sqs_LB" : sigma_sqs_LB,
+                   "sigma_sqs_init" : self.sigma_sqs_init,
+                   "sigma_sqs_init_constrained" : tf.math.log(1.0 + tf.math.exp(sigma_sqs_pre_init)) + sigma_sqs_LB, 
+                   "thetas_init" : self.thetas_init,
+                   "thetas_init_constrained" : tf.math.log(1.0 + tf.math.exp(thetas_pre_init)).numpy(), 
                    "I" : self.I, 
                    "X_samps" : samples[0].numpy(), 
                    "sigma_sqs_samps" : np.log(np.exp(samples[1].numpy()) + 1.0) + sigma_sqs_LB, 
