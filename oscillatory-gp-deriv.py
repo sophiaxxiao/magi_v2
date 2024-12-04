@@ -107,22 +107,71 @@ f_gp = model.m_ds @ tf.transpose(X_cent, perm=[2, 0, 1])
 # compute the true derivatives at truth
 f_ode = tf.transpose(f_vec(I, X_true, thetas_true)[:,None], perm=[2, 0, 1])
 
-# checking whether the derivatives match
+# Compute finite difference derivatives
+f_fd = []
+delta_t = I[1] - I[0]  # Assuming uniform time intervals
+for i in range(X_true.shape[1]):  # Loop over components
+    finite_diff = np.gradient(X_true[:, i], delta_t)
+    f_fd.append(finite_diff)
+f_fd = np.array(f_fd)
+
+# Plot the results
 fig, ax = plt.subplots(1, 4, dpi=200, figsize=(12, 3))
 
-# plot the ODE vs. GP-implied derivatives for each component
+# Plot ODE vs. GP-implied vs. Finite Difference derivatives for each component
 for i, comp in enumerate(["$E$", "$I$", "$R$"]):
     ax[i].set_title(comp)
-    ax[i].plot(I, f_gp[i], label="GP")
-    ax[i].plot(I, f_ode[i], label="ODE")
-    ax[i].grid();
+    ax[i].plot(I, f_gp[i], label="GP", linestyle="-")
+    ax[i].plot(I, f_ode[i], label="ODE", linestyle="--")
+    ax[i].plot(I, f_fd[i], label="Finite Difference", linestyle=":")
+    ax[i].grid()
     ax[i].legend()
 
-# also check the log-posterior
+# Also check the log-posterior
 ax[3].set_title("Log-Posterior")
 ax[3].plot(results["kernel_results"].inner_results.target_log_prob)
 ax[3].grid()
 
-# beautify
+# Beautify
+plt.tight_layout()
+plt.show()
+
+# Original E component
+E_true = X_true[:, 0]
+
+# Finite Difference Derivative for E
+E_fd = np.gradient(E_true, delta_t)
+
+# GP-implied derivative for E
+E_gp = f_gp[0].numpy()
+
+# ODE derivative for E
+E_ode = f_ode[0].numpy()
+
+# Plotting
+fig, ax = plt.subplots(2, 1, dpi=200, figsize=(10, 6), sharex=True)
+
+# Original E values
+ax[0].plot(
+    I, E_true,
+    color='blue', label='Original E (level)',
+    linestyle='-', marker='o', markersize=2, markerfacecolor='red', markeredgecolor='black'
+)
+ax[0].set_title('Original E Component (Level)')
+ax[0].set_ylabel('E')
+ax[0].grid()
+ax[0].legend()
+
+# Derivatives of E
+ax[1].plot(I, E_gp, color='blue', label='GP Derivative')
+ax[1].plot(I, E_ode, color='red', label='ODE Derivative')
+ax[1].plot(I, E_fd, color='green', label='Finite Difference Derivative')
+ax[1].set_title('Derivatives of E Component')
+ax[1].set_xlabel('Time')
+ax[1].set_ylabel('dE/dt')
+ax[1].grid()
+ax[1].legend()
+
+# Adjust layout and show
 plt.tight_layout()
 plt.show()
