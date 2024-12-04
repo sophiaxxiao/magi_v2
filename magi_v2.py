@@ -801,7 +801,7 @@ class MAGI_v2:
         Kappa *= (l ** v)
 
         # https://en.wikipedia.org/wiki/Mat%C3%A9rn_covariance_function
-        np.fill_diagonal(Kappa, val=phi1) # behavior as |s-t| \to 0^+
+        np.fill_diagonal(Kappa, val=phi1 + phi1 * 1e-6) # behavior as |s-t| \to 0^+
 
         # 2. p_Kappa, but need to replace everywhere with l=|s-t|=0 to have value 0.0.
         p_Kappa = (2 ** (1 - (v/2)))

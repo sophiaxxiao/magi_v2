@@ -203,7 +203,6 @@ ax[0].legend()
 # Derivatives of E
 ax[1].plot(I, E_gp, color='blue', label='GP Derivative')
 ax[1].plot(I, E_ode, color='red', label='ODE Derivative')
-ax[1].plot(I, deriv_gp, color='yellow', label='GP hand-made Derivative')
 ax[1].plot(I, E_fd, color='green', label='Finite Difference Derivative')
 ax[1].set_title('Derivatives of E Component')
 ax[1].set_xlabel('Time')
