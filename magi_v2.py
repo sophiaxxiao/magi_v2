@@ -660,7 +660,7 @@ class MAGI_v2:
                                 "sigma_sqs": sigma_sqs, 
                                 "phi2s": phi2s, 
                                 "observations": X_filled_bcst})
-        num_iters = 1000; optimizer = tf_keras.optimizers.Adam(learning_rate=.01)
+        num_iters = 100; optimizer = tf_keras.optimizers.Adam(learning_rate=.01)
 
         # taking one step of Adam + scaling up to train our model
         @tf.function(autograph=True, jit_compile=True)
