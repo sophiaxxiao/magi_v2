@@ -150,6 +150,42 @@ E_gp = f_gp[0].numpy()
 # ODE derivative for E
 E_ode = f_ode[0].numpy()
 
+model.phi1s
+model.phi2s
+
+print_info = (f"GP h-par: outputscale = {model.phi1s[0]}, "
+              f"lengthscale = {model.phi2s[0]}")
+
+
+m_E = model.m_ds[0, :, :]
+X_cent_E = (X_plot - model.mu_ds)[:, 0]
+
+deriv_gp = m_E @ X_cent_E
+
+import matplotlib.pyplot as plt
+import numpy as np
+
+# Assuming m_E is already defined as a numpy array
+fig, ax = plt.subplots(figsize=(10, 8))
+
+# Create the heatmap
+cax = ax.imshow(m_E, cmap='coolwarm', aspect='auto', interpolation='nearest')
+
+# Add a color bar
+cbar = plt.colorbar(cax, ax=ax, fraction=0.046, pad=0.04)
+cbar.set_label('Matrix Values', rotation=270, labelpad=15)
+
+# Add title and labels
+ax.set_title('Heatmap of m_E Matrix in TF', pad=20)
+ax.set_xlabel(print_info)
+ax.set_ylabel('Rows')
+
+# Adjust the layout
+plt.tight_layout()
+
+# Display the heatmap
+plt.show()
+
 # Plotting
 fig, ax = plt.subplots(2, 1, dpi=200, figsize=(10, 6), sharex=True)
 
@@ -167,6 +203,7 @@ ax[0].legend()
 # Derivatives of E
 ax[1].plot(I, E_gp, color='blue', label='GP Derivative')
 ax[1].plot(I, E_ode, color='red', label='ODE Derivative')
+ax[1].plot(I, deriv_gp, color='yellow', label='GP hand-made Derivative')
 ax[1].plot(I, E_fd, color='green', label='Finite Difference Derivative')
 ax[1].set_title('Derivatives of E Component')
 ax[1].set_xlabel('Time')
@@ -177,3 +214,4 @@ ax[1].legend()
 # Adjust layout and show
 plt.tight_layout()
 plt.show()
+
