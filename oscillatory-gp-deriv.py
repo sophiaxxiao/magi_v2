@@ -97,21 +97,23 @@ raw_data["t"] = np.round(raw_data["t"].values, 3)
 raw_data.set_index("t", inplace=True)
 
 # get our true values
-X_true = raw_data.loc[np.round(I, 3)][["E_true", "I_true", "R_true"]].values
+# TODO bug here: rounding error
+X_plot = raw_data.loc[np.round(I, 3)][["E_true", "I_true", "R_true"]].values
+X_plot = pd.read_csv('~/Downloads/xinfer.csv', index_col=0).values
 thetas_true = np.array([6.0, 0.6, 1.8])
 
 # compute GP-implied derivatives at truth
-X_cent = tf.reshape(X_true - model.mu_ds, shape=(X_true.shape[0], 1, X_true.shape[1]))
+X_cent = tf.reshape(X_plot - model.mu_ds, shape=(X_plot.shape[0], 1, X_plot.shape[1]))
 f_gp = model.m_ds @ tf.transpose(X_cent, perm=[2, 0, 1])
 
 # compute the true derivatives at truth
-f_ode = tf.transpose(f_vec(I, X_true, thetas_true)[:,None], perm=[2, 0, 1])
+f_ode = tf.transpose(f_vec(I, X_plot, thetas_true)[:, None], perm=[2, 0, 1])
 
 # Compute finite difference derivatives
 f_fd = []
 delta_t = I[1] - I[0]  # Assuming uniform time intervals
-for i in range(X_true.shape[1]):  # Loop over components
-    finite_diff = np.gradient(X_true[:, i], delta_t)
+for i in range(X_plot.shape[1]):  # Loop over components
+    finite_diff = np.gradient(X_plot[:, i], delta_t)
     f_fd.append(finite_diff)
 f_fd = np.array(f_fd)
 
@@ -137,7 +139,7 @@ plt.tight_layout()
 plt.show()
 
 # Original E component
-E_true = X_true[:, 0]
+E_true = X_plot[:, 0]
 
 # Finite Difference Derivative for E
 E_fd = np.gradient(E_true, delta_t)
