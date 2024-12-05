@@ -76,7 +76,7 @@ class MAGI_v2:
     2. User can overwrite the fitted values with exogenous values on their own.
     '''
     # function for modifying state variables + progressing with the fitting process.
-    def initial_fit(self, discretization : int, verbose=False, use_fourier_prior=True):
+    def initial_fit(self, discretization : int, verbose=False, use_fourier_prior=True, phi_exo=None):
         self.use_fourier_prior = use_fourier_prior
         
         # discretize our data
@@ -101,8 +101,15 @@ class MAGI_v2:
         
         # interpolate our fully/partially-observed components + fit (phi1, phi2, sigma_sq)
         self.X_interp_obs = self._linear_interpolate(self.X_obs_discret[:, self.observed_indicators])
-        hparams_obs = self._fit_kernel_hparams(I=self.I, X_filled=self.X_interp_obs, verbose=verbose)
-        
+        if phi_exo is None:
+            hparams_obs = self._fit_kernel_hparams(I=self.I, X_filled=self.X_interp_obs, verbose=verbose)
+        else:
+            hparams_obs = {
+                'phi1s': phi_exo['phi1s'][self.observed_indicators],
+                'phi2s': phi_exo['phi2s'][self.observed_indicators],
+                'sigma_sqs': phi_exo['sigma_sqs'][self.observed_indicators]
+            }
+
         # populate our hparams + initialize Xhat for the observed components
         self.phi1s[self.observed_indicators] = hparams_obs["phi1s"]
         self.phi2s[self.observed_indicators] = hparams_obs["phi2s"]
@@ -246,7 +253,15 @@ class MAGI_v2:
             self.thetas_init = thetas_var.numpy().copy()
             
             # fit kernel + sigma_sq hparams for unobserved components. Populate our model variables.
-            hparams_unobs = self._fit_kernel_hparams(I=self.I, X_filled=self.X_interp_unobs, verbose=verbose)
+            if phi_exo is None:
+                hparams_unobs = self._fit_kernel_hparams(I=self.I, X_filled=self.X_interp_unobs, verbose=verbose)
+            else:
+                hparams_unobs = {
+                    'phi1s': phi_exo['phi1s'][self.unobserved_components],
+                    'phi2s': phi_exo['phi2s'][self.unobserved_components],
+                    'sigma_sqs': phi_exo['sigma_sqs'][self.unobserved_components]
+                }
+
             self.phi1s[self.unobserved_components] = hparams_unobs["phi1s"]
             self.phi2s[self.unobserved_components] = hparams_unobs["phi2s"]
             self.sigma_sqs_init[self.unobserved_components] = hparams_unobs["sigma_sqs"]
