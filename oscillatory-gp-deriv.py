@@ -104,3 +104,37 @@ print("Estimated Parameters:")
 print(f"- Beta: {np.round(mean_thetas_pred[0], 3)} (Predicted) vs. 6.0 (Actual).")
 print(f"- Gamma: {np.round(mean_thetas_pred[1], 3)} (Predicted) vs. 0.6 (Actual).")
 print(f"- Sigma: {np.round(mean_thetas_pred[2], 3)} (Predicted) vs. 1.8 (Actual).")
+
+import matplotlib.pyplot as plt
+
+# Extract the parameter samples
+thetas_samps = results["thetas_samps"]
+beta_samples = thetas_samps[:, 0]
+gamma_samples = thetas_samps[:, 1]
+sigma_samples = thetas_samps[:, 2]
+
+# Create trace plots for each parameter
+fig, ax = plt.subplots(3, 1, figsize=(10, 8), dpi=200, sharex=True)
+
+# Beta trace plot
+ax[0].plot(beta_samples, color='blue', alpha=0.7, lw=1)
+ax[0].set_title("Trace Plot for $\\beta$ (Beta)", fontsize=12)
+ax[0].set_ylabel("Value")
+ax[0].grid()
+
+# Gamma trace plot
+ax[1].plot(gamma_samples, color='green', alpha=0.7, lw=1)
+ax[1].set_title("Trace Plot for $\\gamma$ (Gamma)", fontsize=12)
+ax[1].set_ylabel("Value")
+ax[1].grid()
+
+# Sigma trace plot
+ax[2].plot(sigma_samples, color='red', alpha=0.7, lw=1)
+ax[2].set_title("Trace Plot for $\\sigma$ (Sigma)", fontsize=12)
+ax[2].set_xlabel("Iteration")
+ax[2].set_ylabel("Value")
+ax[2].grid()
+
+# Adjust layout and show
+plt.tight_layout()
+plt.show()
