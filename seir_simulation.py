@@ -52,3 +52,69 @@ for seed in range(10):
             df = pd.DataFrame(data=data, columns=cols)
             filename = f"tfpigp/data/logSEIR_beta={b}_gamma={g}_sigma={sigma}_alpha={alpha_value}_seed={seed}.csv"
             df.to_csv(filename, index=False)
+
+
+
+
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy.integrate import solve_ivp
+
+# Parameters
+beta, gamma, sigma = 6.0, 0.6, 1.8
+t_start, t_end = 0.0, 20.0
+num_steps = 20001
+t_steps = np.linspace(t_start, t_end, num_steps)
+initial_conditions_log = np.log([0.9899, 0.005, 0.0001])  # Initial logS, logI, logR
+
+# SEIR function for simulation (log scale)
+def f_vec_log(t, logX, thetas):
+    logS, logI, logR = logX
+    beta, gamma, sigma = thetas
+
+    # Convert log variables back to original scale
+    S = np.exp(logS)
+    I = np.exp(logI)
+    R = np.exp(logR)
+
+    # Compute E implicitly
+    E = 1.0 - S - I - R
+
+    # Derivatives in the original scale
+    dSdt = -beta * S * I
+    dIdt = sigma * E - gamma * I
+    dRdt = gamma * I
+
+    # Derivatives in log scale
+    dlogSdt = dSdt / S
+    dlogIdt = dIdt / I
+    dlogRdt = dRdt / R
+
+    return [dlogSdt, dlogIdt, dlogRdt]
+
+# Solve ODE
+solution = solve_ivp(
+    fun=lambda t, logX: f_vec_log(t, logX, [beta, gamma, sigma]),
+    t_span=(t_start, t_end),
+    y0=initial_conditions_log,
+    t_eval=t_steps,
+    atol=1e-10,
+    rtol=1e-10
+)
+
+# Extract results and convert back from log scale
+log_results = solution.y
+results = np.exp(log_results)  # Convert back to original scale
+S, I, R = results
+
+# Plot the results
+plt.figure(figsize=(10, 6))
+plt.plot(t_steps, S, label='S (Susceptible)')
+plt.plot(t_steps, I, label='I (Infected)')
+plt.plot(t_steps, R, label='R (Recovered)')
+plt.xlabel('Time')
+plt.ylabel('Proportion of Population')
+plt.title('SEIR Simulation (Log Scale with E Masked)')
+plt.legend()
+plt.grid()
+plt.show()
