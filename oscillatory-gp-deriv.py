@@ -41,54 +41,60 @@ X_obs = obs_data[["E_obs", "I_obs", "R_obs"]].to_numpy().astype(np.float64) # S 
 model = magi_v2.MAGI_v2(D_thetas=3, ts_obs=ts_obs, X_obs=X_obs, bandsize=None, f_vec=f_vec)
 
 # fit Matern kernel hyperparameters (phi1, phi2) as well as (Xhat_init, sigma_sqs_init, thetas_init)
-# TODO the phi2 is still too small
-phi_exo = {
-    'phi1s': np.array([0.015, 0.007, 0.001]),
-    'phi2s': np.array([2, 1.6, 3]),
-    'sigma_sqs': np.array([0.00022, 0.00078, 0.0033]),
-}
+# phi_exo = {
+#     'phi1s': np.array([0.00630768, 0.00512528, 0.00489537]),
+#     'phi2s': np.array([0.50114429, 0.50701198, 0.46386214]),
+#     'sigma_sqs': np.array([1e-4, 1e-4, 1e-4]),
+# }
+phi_exo = None
 
 model.initial_fit(discretization=2, verbose=True, use_fourier_prior=False, phi_exo=phi_exo)
+model.phi1s
+model.phi2s
+model.sigma_sqs_init
 
 # clear console for pretty output
 clear_output(wait=True)
 
 # collect our samples from NUTS posterior sampling - toggle tempering=True to use log-tempering.
-results = model.predict(num_results=10, num_burnin_steps=10, tempering=False, verbose=True)
+results = model.predict(num_results=1000, num_burnin_steps=1000, tempering=False, verbose=True)
 
-# visualize our trajectories
-fig, ax = plt.subplots(1, 3, dpi=200, figsize=(10, 3))
+# Visualize our trajectories
+fig, ax = plt.subplots(1, 3, dpi=200, figsize=(12, 6))
 
-# get our timesteps, mean trajectory predictions, and 2.5% + 97.5% trajectory predictions
+# Get timesteps, mean trajectory predictions, and 2.5% + 97.5% predictive intervals
 I = results["I"].flatten()
 Xhat_means = results["X_samps"].mean(axis=0)
 Xhat_intervals = np.quantile(results["X_samps"], q=[0.025, 0.975], axis=0)
 Xhat_init = results["Xhat_init"]
 
-# go through each component and plot
+# Loop through each component and plot
 for i, comp in enumerate(["$E$", "$I$", "$R$"]):
 
-    # plot the ground truth + noisy observations
-    ax[i].plot(raw_data["t"], raw_data[["E_true", "I_true", "R_true"][i]], color="black")
+    # Plot ground truth trajectory
+    ax[i].plot(raw_data["t"], raw_data[["E_true", "I_true", "R_true"][i]], color="black", label="Ground Truth")
 
-    # plot mean trajectory + 95% predictive interval
-    ax[i].plot(I, Xhat_means[:, i], color="blue")
-    ax[i].fill_between(I, Xhat_intervals[0, :, i], Xhat_intervals[1, :, i], alpha=0.3)
-    ax[i].plot(I, Xhat_init[:, i], linestyle="--", color="green")
-    ax[i].set_title(comp);
+    # Plot mean trajectory and 95% predictive interval
+    ax[i].plot(I, Xhat_means[:, i], color="blue", label="Mean Prediction")
+    ax[i].fill_between(I, Xhat_intervals[0, :, i], Xhat_intervals[1, :, i], color="blue", alpha=0.3, label="95% Predictive Interval")
+    ax[i].plot(I, Xhat_init[:, i], linestyle="--", color="green", label="Initialization")
+
+    # Plot noisy observations
+    ax[i].scatter(ts_obs, X_obs[:, i], color="grey", s=20, zorder=5, label="Noisy Observations")
+
+    # Titles and labels
+    ax[i].set_title(f"Component {comp}")
     ax[i].set_xlabel("$t$")
+    ax[i].set_ylabel(f"{comp}")
     ax[i].grid()
 
-# shared legend + beautify
-observed_components_desc = str(tuple(np.array(["$E$", "$I$", "$R$"]))).replace("'", "").strip()
-plt.suptitle(f"Predicted Trajectories vs. Ground Truth | Observed Components: {observed_components_desc}")
-custom_lines = [Line2D([0], [0], color="black", linewidth=1.0, alpha=1.0, label="Ground Truth"),
-                Line2D([0], [0], color="grey", marker="o", linestyle="None", label="Noisy Observations"),
-                Line2D([0], [0], color="blue", linewidth=1.0, alpha=1.0, label="Mean Prediction"),
-                Line2D([0], [0], color="green", linestyle="--", linewidth=1.0, alpha=1.0, label="Initialization"),
-                Patch(facecolor="blue", alpha=0.3, label="95% Predictive Interval")]
-fig.legend(handles=custom_lines, loc="lower center", ncol=5, fontsize=10, bbox_to_anchor=(0.5, -0.075))
-plt.tight_layout()
+# Set shared legend at a better position to avoid overlap
+handles, labels = ax[0].get_legend_handles_labels()
+fig.legend(handles, labels, loc="upper center", ncol=5, fontsize=10)
+
+# Beautify the layout
+# plt.suptitle("Predicted Trajectories vs. Ground Truth", fontsize=14)
+plt.tight_layout(rect=[0, 0, 1, 0.95])
 plt.show()
 
 # check our parameters too
@@ -98,126 +104,3 @@ print("Estimated Parameters:")
 print(f"- Beta: {np.round(mean_thetas_pred[0], 3)} (Predicted) vs. 6.0 (Actual).")
 print(f"- Gamma: {np.round(mean_thetas_pred[1], 3)} (Predicted) vs. 0.6 (Actual).")
 print(f"- Sigma: {np.round(mean_thetas_pred[2], 3)} (Predicted) vs. 1.8 (Actual).")
-
-# checking derivatives (i.e., physics fidelity)
-raw_data["t"] = np.round(raw_data["t"].values, 3)
-raw_data.set_index("t", inplace=True)
-
-# get our true values
-# TODO bug here: rounding error
-X_plot = raw_data.loc[np.round(I, 3)][["E_true", "I_true", "R_true"]].values
-X_plot = pd.read_csv('~/Downloads/xinfer.csv', index_col=0).values
-thetas_true = np.array([6.0, 0.6, 1.8])
-
-# compute GP-implied derivatives at truth
-X_cent = tf.reshape(X_plot - model.mu_ds, shape=(X_plot.shape[0], 1, X_plot.shape[1]))
-f_gp = model.m_ds @ tf.transpose(X_cent, perm=[2, 0, 1])
-
-# compute the true derivatives at truth
-f_ode = tf.transpose(f_vec(I, X_plot, thetas_true)[:, None], perm=[2, 0, 1])
-
-# Compute finite difference derivatives
-f_fd = []
-delta_t = I[1] - I[0]  # Assuming uniform time intervals
-for i in range(X_plot.shape[1]):  # Loop over components
-    finite_diff = np.gradient(X_plot[:, i], delta_t)
-    f_fd.append(finite_diff)
-f_fd = np.array(f_fd)
-
-# Plot the results
-fig, ax = plt.subplots(1, 4, dpi=200, figsize=(12, 3))
-
-# Plot ODE vs. GP-implied vs. Finite Difference derivatives for each component
-for i, comp in enumerate(["$E$", "$I$", "$R$"]):
-    ax[i].set_title(comp)
-    ax[i].plot(I, f_gp[i], label="GP", linestyle="-")
-    ax[i].plot(I, f_ode[i], label="ODE", linestyle="--")
-    ax[i].plot(I, f_fd[i], label="Finite Difference", linestyle=":")
-    ax[i].grid()
-    ax[i].legend()
-
-# Also check the log-posterior
-ax[3].set_title("Log-Posterior")
-ax[3].plot(results["kernel_results"].inner_results.target_log_prob)
-ax[3].grid()
-
-# Beautify
-plt.tight_layout()
-plt.show()
-
-# Original E component
-E_true = X_plot[:, 0]
-
-# Finite Difference Derivative for E
-E_fd = np.gradient(E_true, delta_t)
-
-# GP-implied derivative for E
-E_gp = f_gp[0].numpy()
-
-# ODE derivative for E
-E_ode = f_ode[0].numpy()
-
-model.phi1s
-model.phi2s
-
-print_info = (f"GP h-par: outputscale = {model.phi1s[0]}, "
-              f"lengthscale = {model.phi2s[0]}")
-
-
-m_E = model.m_ds[0, :, :]
-X_cent_E = (X_plot - model.mu_ds)[:, 0]
-
-deriv_gp = m_E @ X_cent_E
-
-import matplotlib.pyplot as plt
-import numpy as np
-
-# Assuming m_E is already defined as a numpy array
-fig, ax = plt.subplots(figsize=(10, 8))
-
-# Create the heatmap
-cax = ax.imshow(m_E, cmap='coolwarm', aspect='auto', interpolation='nearest')
-
-# Add a color bar
-cbar = plt.colorbar(cax, ax=ax, fraction=0.046, pad=0.04)
-cbar.set_label('Matrix Values', rotation=270, labelpad=15)
-
-# Add title and labels
-ax.set_title('Heatmap of m_E Matrix in TF', pad=20)
-ax.set_xlabel(print_info)
-ax.set_ylabel('Rows')
-
-# Adjust the layout
-plt.tight_layout()
-
-# Display the heatmap
-plt.show()
-
-# Plotting
-fig, ax = plt.subplots(2, 1, dpi=200, figsize=(10, 6), sharex=True)
-
-# Original E values
-ax[0].plot(
-    I, E_true,
-    color='blue', label='Original E (level)',
-    linestyle='-', marker='o', markersize=2, markerfacecolor='red', markeredgecolor='black'
-)
-ax[0].set_title('Original E Component (Level)')
-ax[0].set_ylabel('E')
-ax[0].grid()
-ax[0].legend()
-
-# Derivatives of E
-ax[1].plot(I, E_gp, color='blue', label='GP Derivative')
-ax[1].plot(I, E_ode, color='red', label='ODE Derivative')
-ax[1].plot(I, E_fd, color='green', label='Finite Difference Derivative')
-ax[1].set_title('Derivatives of E Component')
-ax[1].set_xlabel('Time')
-ax[1].set_ylabel('dE/dt')
-ax[1].grid()
-ax[1].legend()
-
-# Adjust layout and show
-plt.tight_layout()
-plt.show()
-
