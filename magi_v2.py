@@ -76,7 +76,8 @@ class MAGI_v2:
     2. User can overwrite the fitted values with exogenous values on their own.
     '''
     # function for modifying state variables + progressing with the fitting process.
-    def initial_fit(self, discretization : int, verbose=False):
+    def initial_fit(self, discretization : int, verbose=False, use_fourier_prior=True):
+        self.use_fourier_prior = use_fourier_prior
         
         # discretize our data
         self.I, self.X_obs_discret = self._discretize(self.ts_obs, self.X_obs, discretization)
@@ -615,26 +616,31 @@ class MAGI_v2:
         2. Resolve by noting that for Normal / TruncatedNormal, scaling LLH by 1/D ~ scaling Normal variance by D.
         3. gpjm.log_prob() is a D_observed x D_observed matrix of partial derivatives. We can take TRACE!
         '''
+
+        #### 3. CHOOSE PRIOR FOR PHI2 BASED ON FLAG
+        if not self.use_fourier_prior:
+            # Flat prior for phi2 (mean = 1.0, large variance)
+            mu_phi2s = np.full(D_filled, 1.0)
+            sd_phi2s = np.full(D_filled, 1000.0)
+
         # constructing a sampleable-object to pass into TFP optimization
-        gpjm = tfd.JointDistributionNamed({"phi1s" : 
-                                           tfd.TruncatedNormal(loc=np.float64([1e-4] * D_filled), 
-                                                               low=np.float64([1e-6] * D_filled), 
-                                                               high=np.float64([np.inf] * D_filled),
-                                                               scale=np.float64([1000.0 * np.sqrt(D_filled)]\
-                                                                                * D_filled)), # flat prior
-                                           "sigma_sqs" : 
-                                           tfd.TruncatedNormal(loc=np.float64( ((X_filled.std(axis=0)) * 0.1 ) ** 2), 
-                                                               low=np.float64([1e-6] * D_filled), 
-                                                               high=np.float64([np.inf] * D_filled),
-                                                               scale=np.float64([1000.0 * np.sqrt(D_filled)]\
-                                                                                * D_filled)), # flat prior
-                                           "phi2s" : 
-                                           tfd.TruncatedNormal(loc=np.float64(mu_phi2s), 
-                                                               low=np.float64([1e-6] * D_filled), 
-                                                               high=np.float64([np.inf] * D_filled),
-                                                               scale=np.float64(sd_phi2s\
-                                                                                * np.sqrt(D_filled))), # Fourier-informed prior
-                                           "observations" : build_gps})
+        gpjm = tfd.JointDistributionNamed(
+            {"phi1s" :
+                 tfd.TruncatedNormal(loc=np.float64([1e-4] * D_filled),
+                                     low=np.float64([1e-6] * D_filled),
+                                     high=np.float64([np.inf] * D_filled),
+                                     scale=np.float64([1000.0 * np.sqrt(D_filled)] * D_filled)), # flat prior
+             "sigma_sqs" :
+                 tfd.TruncatedNormal(loc=np.float64( ((X_filled.std(axis=0)) * 0.1 ) ** 2),
+                                     low=np.float64([1e-6] * D_filled),
+                                     high=np.float64([np.inf] * D_filled),
+                                     scale=np.float64([1000.0 * np.sqrt(D_filled)] * D_filled)), # flat prior
+             "phi2s" :
+                 tfd.TruncatedNormal(loc=np.float64(mu_phi2s),
+                                     low=np.float64([1e-6] * D_filled),
+                                     high=np.float64([np.inf] * D_filled),
+                                     scale=np.float64(sd_phi2s * np.sqrt(D_filled))),
+             "observations" : build_gps})
 
         # define our TO-BE-TRAINABLE variables + constrain them to be positive, and then make them positive.
         phi1s_var = tfp.util.TransformedVariable(initial_value=X_filled.std(axis=0) ** 2, 
@@ -821,7 +827,7 @@ class MAGI_v2:
         Kappa_pp /= ( (phi2 ** 2) * (l ** 2) * gamma(v) )
 
         # CHECK WITH PROF. YANG ABOUT THIS ONE! SHOULD THERE BE A NEGATIVE HERE?
-        np.fill_diagonal(Kappa_pp, val=v*phi1/( (phi2 ** 2) * (v-1) )) # behavior as |s-t| \to 0^+
+        np.fill_diagonal(Kappa_pp, val=v*phi1/( (phi2 ** 2) * (v-1) ) * (1 + 1e-6)) # behavior as |s-t| \to 0^+
 
         # 5. form our C, m, and K matrices (let's not do any band approximations yet!)
         C_d, Kappa_inv = Kappa.copy(), np.linalg.pinv(Kappa)
