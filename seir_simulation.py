@@ -28,7 +28,7 @@ for seed in range(10):
 
 
             # initial conditions
-            SEIR_init = np.array([9900, 50, 50, 0])
+            SEIR_init = np.array([9899, 50, 50, 1])
             t_start, t_end = 0.0, 20.0
             t_steps = np.linspace(start=t_start, stop=t_end, num=20001)
 
@@ -36,12 +36,13 @@ for seed in range(10):
             X = solve_ivp(fun=SEIR, t_span=(t_start, t_end), y0=SEIR_init,
                           t_eval=t_steps, atol=1e-10, rtol=1e-10).y.T
 
-            # compute noise levels
-            sigmas = alpha_value * (X.max(axis=0) - X.min(axis=0))
+            # Compute noise levels (on log scale)
+            X_log = np.log(X)
 
-            # add noise to the data
-            X_noised = X.copy()
-            X_noised += np.random.normal(loc=0.0, scale=sigmas, size=X.shape)
+            # Add noise to the data (on log scale)
+            X_noised_log = X_log.copy()
+            X_noised_log += np.random.normal(loc=0.0, scale=alpha_value, size=X_log.shape)
+            X_noised = np.exp(X_noised_log)
 
             # save time, X_noised, and true values
             data = np.hstack([t_steps.reshape(-1, 1), X_noised, X])
@@ -49,5 +50,5 @@ for seed in range(10):
                     "S_true", "E_true", "I_true", "R_true"]
 
             df = pd.DataFrame(data=data, columns=cols)
-            filename = f"SEIR_beta={b}_gamma={g}_sigma={sigma}_alpha={alpha_value}_seed={seed}.csv"
+            filename = f"tfpigp/data/logSEIR_beta={b}_gamma={g}_sigma={sigma}_alpha={alpha_value}_seed={seed}.csv"
             df.to_csv(filename, index=False)
