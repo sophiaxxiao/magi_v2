@@ -41,7 +41,14 @@ X_obs = obs_data[["E_obs", "I_obs", "R_obs"]].to_numpy().astype(np.float64) # S 
 model = magi_v2.MAGI_v2(D_thetas=3, ts_obs=ts_obs, X_obs=X_obs, bandsize=None, f_vec=f_vec)
 
 # fit Matern kernel hyperparameters (phi1, phi2) as well as (Xhat_init, sigma_sqs_init, thetas_init)
-model.initial_fit(discretization=2, verbose=True)
+# TODO the phi2 is still too small
+phi_exo = {
+    'phi1s': np.array([0.015, 0.007, 0.001]),
+    'phi2s': np.array([2, 1.6, 3]),
+    'sigma_sqs': np.array([0.00022, 0.00078, 0.0033]),
+}
+
+model.initial_fit(discretization=2, verbose=True, use_fourier_prior=False, phi_exo=phi_exo)
 
 # clear console for pretty output
 clear_output(wait=True)
