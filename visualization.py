@@ -73,6 +73,11 @@ def plot_trace(thetas_samps, true_values=None, param_names=["$\\beta$", "$\\gamm
         ax[i, 1].set_xlabel("Density")
         ax[i, 1].grid()
 
+        # Add a vertical red line for the true value
+        if true_values is not None:
+            ax[i, 1].axhline(y=true_values[i], color="red", linestyle="--", label="True Value")
+            ax[i, 1].legend(loc="upper right")
+
         # Match the y-axis of the histogram to the trace plot for visual consistency
         ax[i, 1].set_ylim(ax[i, 0].get_ylim())
 
@@ -81,7 +86,6 @@ def plot_trace(thetas_samps, true_values=None, param_names=["$\\beta$", "$\\gamm
 
     plt.tight_layout()
     plt.show()
-
 
 def print_parameter_estimates(results, true_values):
     """
