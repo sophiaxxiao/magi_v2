@@ -9,7 +9,7 @@ for seed in range(10):
         for params in [(6.0, 0.6, 1.8)]:
             np.random.seed(seed)
 
-            b, g, sigma, alpha_value, N = params[0], params[1], params[2], alpha, 10000
+            b, g, sigma, alpha_value, N = params[0], params[1], params[2], alpha, 1.0
 
 
             # encode ODEs for solve_ivp data-generation processes
@@ -28,7 +28,7 @@ for seed in range(10):
 
 
             # initial conditions
-            SEIR_init = np.array([9899, 50, 50, 1])
+            SEIR_init = np.array([0.9899, 0.0050, 0.0050, 0.0001])
             t_start, t_end = 0.0, 20.0
             t_steps = np.linspace(start=t_start, stop=t_end, num=20001)
 
