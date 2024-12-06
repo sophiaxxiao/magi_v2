@@ -68,9 +68,9 @@ model = magi_v2.MAGI_v2(D_thetas=3, ts_obs=ts_obs, X_obs=X_obs, bandsize=None, f
 # Fit initial hyperparameters
 phi_exo = None
 model.initial_fit(discretization=2, verbose=True, use_fourier_prior=False, phi_exo=phi_exo)
-model.phi1s
-model.phi2s
-model.sigma_sqs_init
+model.phi1s[0] = 2
+model.phi2s[0] = 0.44
+model.update_kernel_matrices(I_new=model.I, phi1s_new=model.phi1s, phi2s_new=model.phi2s)
 
 clear_output(wait=True)
 
@@ -108,9 +108,9 @@ model.update_kernel_matrices(I_new=I_new, phi1s_new=model.phi1s, phi2s_new=model
 
 # Use posterior means for sigma_sqs as a starting point
 model.sigma_sqs_init = results["sigma_sqs_samps"].mean(axis=0)
-# Use the last sampled thetas and X_samps as starting points
-model.thetas_init = results["thetas_samps"][-1]
-Xhat_init_in = results["X_samps"][-1]
+# Use the posterior means for thetas and X_samps as starting points
+model.thetas_init = results["thetas_samps"].mean(axis=0)
+Xhat_init_in = results["X_samps"].mean(axis=0)
 
 # The states in Xhat_init_in are [logE, logI, logR]
 # ODE in original (linear) scale to integrate forward
