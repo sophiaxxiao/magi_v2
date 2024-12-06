@@ -5,6 +5,7 @@ import matplotlib.pyplot as plt
 from IPython.display import clear_output
 import tfpigp.magi_v2 as magi_v2  # MAGI-TFP class for Bayesian inference
 from tfpigp.visualization import *
+from scipy.integrate import solve_ivp
 
 # Define the EIR representation ODE on the log scale
 def f_vec(t, X, thetas):
@@ -81,3 +82,70 @@ plot_trajectories(ts_true, x_true, results, ts_obs, X_obs)
 plot_trajectories(ts_true, x_true, results, ts_obs, X_obs, trans_func=np.exp)
 print_parameter_estimates(results, [6.0, 0.6, 1.8])
 plot_trace(results["thetas_samps"], [6.0, 0.6, 1.8], ["beta", "gamma", "sigma"])
+
+
+# 'results' contains posterior samples from the in-sample fit, e.g. up to t_max=2.0
+# Now we want to predict out-of-sample beyond t=2.0, say up to t=4.0
+
+t_step_prev_end = 2.0  # end of the in-sample period used in the first script
+t_forecast_end = 4.0   # new forecast horizon
+t_stepsize = 2.0       # length of the new interval we want to forecast
+
+# We assume a similar density of discretization points as the in-sample fit.
+# The first script used something like 20 observations per unit time.
+# The model.I attribute contains the discretization grid used internally.
+# We will extend this grid to t=4.0
+
+I_append = np.linspace(start=model.I[-1, 0],
+                       stop=model.I[-1, 0] + t_stepsize,
+                       num=int(80 * t_stepsize + 1))[1:].reshape(-1,1)
+I_new = np.vstack([model.I, I_append])
+
+# Update kernel matrices for the extended interval
+model.update_kernel_matrices(I_new=I_new, phi1s_new=model.phi1s, phi2s_new=model.phi2s)
+
+# Use posterior means for sigma_sqs as a starting point
+model.sigma_sqs_init = results["sigma_sqs_samps"].mean(axis=0)
+# Use the last sampled thetas and X_samps as starting points
+model.thetas_init = results["thetas_samps"][-1]
+Xhat_init_in = results["X_samps"][-1]
+
+# The states in Xhat_init_in are [logE, logI, logR]
+# ODE in original (linear) scale to integrate forward
+# Create a wrapper for solve_ivp in log-scale
+def ODE_log_scale(t, y, theta):
+    # y is [logE, logI, logR]
+    y_tf = tf.convert_to_tensor(y.reshape(1,-1), dtype=tf.float64)
+    theta_tf = tf.convert_to_tensor(theta, dtype=tf.float64)
+    dYdt_tf = f_vec(t, y_tf, theta_tf)
+    return dYdt_tf[0].numpy()  # return numpy array of shape (3,)
+
+# Integrate forward in log-scale from t=2.0 to t=4.0
+sol = solve_ivp(fun=lambda t, y: ODE_log_scale(t, y, model.thetas_init),
+                t_span=(t_step_prev_end, I_append[-1,0]),
+                y0=Xhat_init_in[-1],  # last known log-state
+                t_eval=np.concatenate(([t_step_prev_end], I_append.flatten())),
+                rtol=1e-10, atol=1e-10)
+
+# Extract the solution beyond t=2.0
+Xhat_init_out_log = sol.y.T[1:]  # shape (#new_points, 3)
+
+# Combine old and new
+Xhat_init_combined = np.vstack([Xhat_init_in, Xhat_init_out_log])
+model.Xhat_init = Xhat_init_combined
+
+# Now run prediction again for the extended time period
+results_forecast = model.predict(num_results=1000, num_burnin_steps=1000, tempering=False, verbose=True)
+
+# plot
+raw_data = pd.read_csv('tfpigp/data/logSEIR_beta=6.0_gamma=0.6_sigma=1.8_alpha=0.15_seed=2.csv').query(f"t <= {t_forecast_end}")
+ts_true = raw_data.t.values
+x_true = raw_data[["E_true", "I_true", "R_true"]]
+x_true = np.log(x_true)
+
+# results_forecast now contains posterior samples for the entire time range [0,4], including the forecasted portion.
+
+# Optionally, we can visualize the forecast:
+plot_trajectories(ts_true, x_true, results_forecast, ts_obs, X_obs)
+plot_trajectories(ts_true, x_true, results_forecast, ts_obs, X_obs, trans_func=np.exp)
+plot_trace(results_forecast["thetas_samps"], [6.0, 0.6, 1.8], ["beta", "gamma", "sigma"])
