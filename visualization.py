@@ -42,23 +42,43 @@ def plot_trajectories(ts_true, x_true, results, ts_obs, X_obs, trans_func=lambda
     plt.tight_layout(rect=[0, 0, 1, 0.95])
     plt.show()
 
-def plot_trace(thetas_samps, param_names=["$\\beta$", "$\\gamma$", "$\\sigma$"]):
+
+def plot_trace(thetas_samps, true_values=None, param_names=["$\\beta$", "$\\gamma$", "$\\sigma$"]):
     """
-    Plot trace plots for sampled parameters.
+    Plot trace plots and histograms for sampled parameters.
 
     Parameters:
     - thetas_samps: Array of sampled parameters with shape (num_samples, num_params).
+    - true_values: List of true parameter values for comparison (default: None).
     - param_names: List of parameter names for labeling (default: ["$\\beta$", "$\\gamma$", "$\\sigma$"]).
     """
-    fig, ax = plt.subplots(len(param_names), 1, figsize=(10, 8), dpi=200, sharex=True)
+    num_params = len(param_names)
+    fig, ax = plt.subplots(num_params, 2, figsize=(12, 3 * num_params), dpi=200)
 
     for i, param in enumerate(param_names):
-        ax[i].plot(thetas_samps[:, i], alpha=0.7, lw=1)
-        ax[i].set_title(f"Trace Plot for {param}", fontsize=12)
-        ax[i].set_ylabel("Value")
-        ax[i].grid()
+        # Trace plot
+        ax[i, 0].plot(thetas_samps[:, i], alpha=0.7, lw=1, color="blue")
+        ax[i, 0].set_title(f"Trace Plot for {param}", fontsize=12)
+        ax[i, 0].set_ylabel("Value")
+        ax[i, 0].grid()
 
-    ax[-1].set_xlabel("Iteration")
+        # Add true value as a horizontal line if provided
+        if true_values is not None:
+            ax[i, 0].axhline(y=true_values[i], color="red", linestyle="--", label="True Value")
+            ax[i, 0].legend(loc="upper right")
+
+        # Histogram
+        ax[i, 1].hist(thetas_samps[:, i], bins=30, density=True, orientation="horizontal", color="green", alpha=0.7)
+        ax[i, 1].set_title(f"Histogram for {param}", fontsize=12)
+        ax[i, 1].set_xlabel("Density")
+        ax[i, 1].grid()
+
+        # Match the y-axis of the histogram to the trace plot for visual consistency
+        ax[i, 1].set_ylim(ax[i, 0].get_ylim())
+
+    # Label the x-axis of the trace plots at the bottom row
+    ax[-1, 0].set_xlabel("Iteration")
+
     plt.tight_layout()
     plt.show()
 
