@@ -1,7 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 
-def plot_trajectories(ts_true, x_true, results, ts_obs, X_obs, trans_func=lambda x: x):
+def plot_trajectories(ts_true, x_true, results, ts_obs, X_obs, trans_func=lambda x: x, caption_text=""):
     """
     Plot the predicted trajectories against ground truth and noisy observations.
 
@@ -41,6 +41,7 @@ def plot_trajectories(ts_true, x_true, results, ts_obs, X_obs, trans_func=lambda
 
     handles, labels = ax[0].get_legend_handles_labels()
     fig.legend(handles, labels, loc="upper center", ncol=5, fontsize=10)
+    fig.text(0.5, 0.01, caption_text, ha='center', fontsize=10, color='gray')
     plt.tight_layout(rect=[0, 0, 1, 0.95])
     plt.show()
 

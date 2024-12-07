@@ -100,10 +100,11 @@ results = model.predict(num_results=5000, num_burnin_steps=10000, tempering=Fals
 ts_true = raw_data.t.values
 x_true = raw_data[["E_true", "I_true", "R_true"]]
 x_true = np.log(x_true)
-plot_trajectories(ts_true, x_true, results, ts_obs, X_obs)
-plot_trajectories(ts_true, x_true, results, ts_obs, X_obs, trans_func=np.exp)
+plot_trajectories(ts_true, x_true, results, ts_obs, X_obs, caption_text="MAGI on log-scale SEIR")
+plot_trajectories(ts_true, x_true, results, ts_obs, X_obs, trans_func=np.exp, caption_text="MAGI on original-scale SEIR")
 print_parameter_estimates(results, [6.0, 0.6, 1.8])
-plot_trace(results["thetas_samps"], [6.0, 0.6, 1.8], ["beta", "gamma", "sigma"])
+plot_trace(results["thetas_samps"], [6.0, 0.6, 1.8], ["beta", "gamma", "sigma"],
+           "trace plot for theta in MAGI")
 
 
 # 'results' contains posterior samples from the in-sample fit, e.g. up to t_max=2.0
