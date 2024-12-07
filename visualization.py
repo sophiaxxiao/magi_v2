@@ -29,6 +29,8 @@ def plot_trajectories(ts_true, x_true, results, ts_obs, X_obs, trans_func=lambda
         ax[i].plot(I, Xhat_means[:, i], color="blue", label="Mean Prediction")
         ax[i].fill_between(I, Xhat_intervals[0, :, i], Xhat_intervals[1, :, i], color="blue", alpha=0.3, label="95% Predictive Interval")
         ax[i].plot(I, Xhat_init[:, i], linestyle="--", color="green", label="Initialization")
+        if "Xhat_mle" in results:
+            ax[i].plot(I, trans_func(results["Xhat_mle"])[:, i], linestyle="--", color="red", label="MLE")
         # Plot noisy observations
         ax[i].scatter(ts_obs, trans_func(X_obs[:, i]), color="grey", s=20, zorder=5, label="Noisy Observations")
         # Titles and labels

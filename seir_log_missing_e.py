@@ -6,6 +6,7 @@ from IPython.display import clear_output
 import tfpigp.magi_v2 as magi_v2  # MAGI-TFP class for Bayesian inference
 from tfpigp.visualization import *
 from scipy.integrate import solve_ivp
+from tfpigp.mle import mle
 
 # Define the EIR representation ODE on the log scale
 def f_vec(t, X, thetas):
@@ -62,6 +63,10 @@ X_obs = np.log(obs_data[["E_obs", "I_obs", "R_obs"]].to_numpy().astype(np.float6
 
 X_obs[:,0] = np.nan
 
+# benchmark MLE
+final_thetas, X0_final = mle(ts_obs, X_obs, maxiter=1000)
+
+
 # Create the MAGI-TFP model
 model = magi_v2.MAGI_v2(D_thetas=3, ts_obs=ts_obs, X_obs=X_obs, bandsize=None, f_vec=f_vec)
 
@@ -75,7 +80,7 @@ model.update_kernel_matrices(I_new=model.I, phi1s_new=model.phi1s, phi2s_new=mod
 clear_output(wait=True)
 
 # Collect samples using NUTS posterior sampling
-results = model.predict(num_results=1000, num_burnin_steps=1000, tempering=False, verbose=True)
+results = model.predict(num_results=5000, num_burnin_steps=10000, tempering=False, verbose=True)
 
 ts_true = raw_data.t.values
 x_true = raw_data[["E_true", "I_true", "R_true"]]
@@ -137,7 +142,7 @@ Xhat_init_combined = np.vstack([Xhat_init_in, Xhat_init_out_log])
 model.Xhat_init = Xhat_init_combined
 
 # Now run prediction again for the extended time period
-results_forecast = model.predict(num_results=1000, num_burnin_steps=1000, tempering=False, verbose=True)
+results_forecast = model.predict(num_results=1000, num_burnin_steps=5000, tempering=False, verbose=True)
 
 # plot
 raw_data = pd.read_csv('tfpigp/data/logSEIR_beta=6.0_gamma=0.6_sigma=1.8_alpha=0.15_seed=2.csv').query(f"t <= {t_forecast_end}")
@@ -151,3 +156,11 @@ x_true = np.log(x_true)
 plot_trajectories(ts_true, x_true, results_forecast, ts_obs, X_obs)
 plot_trajectories(ts_true, x_true, results_forecast, ts_obs, X_obs, trans_func=np.exp)
 plot_trace(results_forecast["thetas_samps"], [6.0, 0.6, 1.8], ["beta", "gamma", "sigma"])
+
+sol_mle = solve_ivp(fun=lambda t, y: ODE_log_scale(t, y, final_thetas),
+                    t_span=(model.I[0], model.I[-1]),
+                    y0=X0_final,  # last known log-state
+                    t_eval=model.I.flatten(),
+                    rtol=1e-10, atol=1e-10)
+results_forecast["Xhat_mle"] = sol_mle.y.T
+plot_trajectories(ts_true, x_true, results_forecast, ts_obs, X_obs, trans_func=np.exp)
