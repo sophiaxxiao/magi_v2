@@ -223,7 +223,8 @@ def simulate_trajectory(params, t_eval):
     return E, I, R
 
 
-def plot_mcmc(samples, raw_data, X_obs, ts_obs, final_thetas, X0_final, t_max=2.0, n_pred_samples=1000, caption_text="MCMC on MLE"):
+def plot_mcmc(samples, raw_data, X_obs, ts_obs, final_thetas, X0_final, t_max=2.0, n_pred_samples=1000,
+              caption_text="MCMC on MLE", output_dir=None):
     # Extract parameter names and indices
     # Define a fine time grid for plotting
     t_fine = np.linspace(ts_obs[0], t_max, 200)
@@ -328,4 +329,7 @@ def plot_mcmc(samples, raw_data, X_obs, ts_obs, final_thetas, X0_final, t_max=2.
     fig.text(0.5, 0.01, caption_text, ha='center', fontsize=10, color='gray')
 
     plt.tight_layout(rect=[0, 0, 1, 0.9])
-    plt.show()
+    if output_dir:
+        plt.savefig(f"{output_dir}/f{caption_text.replace(' ', '_')}.png")
+    else:
+        plt.show()

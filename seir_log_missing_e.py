@@ -1,4 +1,7 @@
 import numpy as np
+import os
+import argparse
+import pickle
 import pandas as pd
 import tensorflow as tf
 import matplotlib.pyplot as plt
@@ -53,8 +56,21 @@ def f_vec(t, X, thetas):
 d_obs = 20  # Observations per unit time
 t_max = 2.0  # Observation interval length
 
+
+# Add command-line argument for the seed
+parser = argparse.ArgumentParser(description="Run SEIR model and save results.")
+parser.add_argument("--seed", type=int, required=True, help="Seed for the simulation")
+args = parser.parse_args()
+
+# Seed value from command-line argument
+seed = args.seed
+
+# Specify output directory and create it if it doesn't exist
+output_dir = f"results_seed_{seed}"
+os.makedirs(output_dir, exist_ok=True)
+
 # Load data and select observations
-orig_data = pd.read_csv('tfpigp/data/logSEIR_beta=6.0_gamma=0.6_sigma=1.8_alpha=0.15_seed=2.csv')
+orig_data = pd.read_csv(f'tfpigp/data/logSEIR_beta=6.0_gamma=0.6_sigma=1.8_alpha=0.15_seed={seed}.csv')
 raw_data = orig_data.query(f"t <= {t_max}")
 obs_data = raw_data.iloc[::int((raw_data.index.shape[0] - 1) / (d_obs * t_max))]
 
@@ -78,9 +94,9 @@ burn_in = 1000
 samples = chain[burn_in:]
 
 plot_mcmc(samples, orig_data, np.exp(X_obs), ts_obs, final_thetas, X0_final, t_max=4.0, n_pred_samples=400,
-          caption_text="MCMC on MLE likelihood")
+          caption_text="MCMC on MLE likelihood", output_dir=output_dir)
 plot_trace(np.exp(samples[:, :3]), [6.0, 0.6, 1.8], ["beta", "gamma", "sigma"],
-           "trace plot for theta in MCMC on MLE likelihood")
+           "trace plot for theta in MCMC on MLE likelihood", output_dir=output_dir)
 
 # Create the MAGI-TFP model
 model = magi_v2.MAGI_v2(D_thetas=3, ts_obs=ts_obs, X_obs=X_obs, bandsize=None, f_vec=f_vec)
@@ -100,8 +116,8 @@ results = model.predict(num_results=5000, num_burnin_steps=10000, tempering=Fals
 ts_true = raw_data.t.values
 x_true = raw_data[["E_true", "I_true", "R_true"]]
 x_true = np.log(x_true)
-plot_trajectories(ts_true, x_true, results, ts_obs, X_obs, caption_text="MAGI on log-scale SEIR")
-plot_trajectories(ts_true, x_true, results, ts_obs, X_obs, trans_func=np.exp, caption_text="MAGI on original-scale SEIR")
+plot_trajectories(ts_true, x_true, results, ts_obs, X_obs, caption_text="MAGI on log-scale SEIR", output_dir=output_dir)
+plot_trajectories(ts_true, x_true, results, ts_obs, X_obs, trans_func=np.exp, caption_text="MAGI on original-scale SEIR", output_dir=output_dir)
 print_parameter_estimates(results, [6.0, 0.6, 1.8])
 
 theta_samples = results["thetas_samps"]  # Shape: (num_samples, 3)
@@ -113,7 +129,7 @@ R0_samples = beta_samples / (gamma_samples + sigma_samples)
 theta_samples = np.hstack([theta_samples, R0_samples.reshape(-1, 1)])
 
 plot_trace(theta_samples, [6.0, 0.6, 1.8, (6.0 / (0.6 + 1.8))], ["beta", "gamma", "sigma", "R0"],
-           "trace plot for theta in MAGI")
+           "trace plot for theta in MAGI", output_dir=output_dir)
 
 
 # 'results' contains posterior samples from the in-sample fit, e.g. up to t_max=2.0
@@ -178,7 +194,8 @@ x_true = np.log(x_true)
 # results_forecast now contains posterior samples for the entire time range [0,4], including the forecasted portion.
 
 # Optionally, we can visualize the forecast:
-plot_trace(results_forecast["thetas_samps"], [6.0, 0.6, 1.8], ["beta", "gamma", "sigma"])
+plot_trace(results_forecast["thetas_samps"], [6.0, 0.6, 1.8], ["beta", "gamma", "sigma"],
+           caption_text="trace plot for theta in MAGI forecast", output_dir=output_dir)
 
 sol_mle = solve_ivp(fun=lambda t, y: ODE_log_scale(t, y, final_thetas),
                     t_span=(model.I[0], model.I[-1]),
@@ -186,4 +203,20 @@ sol_mle = solve_ivp(fun=lambda t, y: ODE_log_scale(t, y, final_thetas),
                     t_eval=model.I.flatten(),
                     rtol=1e-10, atol=1e-10)
 results_forecast["Xhat_mle"] = sol_mle.y.T
-plot_trajectories(ts_true, x_true, results_forecast, ts_obs, X_obs, trans_func=np.exp)
+plot_trajectories(ts_true, x_true, results_forecast, ts_obs, X_obs, trans_func=np.exp, caption_text="MAGI forecast",
+                  output_dir=output_dir)
+
+# Save results and data as pickle files
+output_data = {
+    "ts_true": ts_true,
+    "x_true": x_true,
+    "results_forecast": results_forecast,
+    "X_obs": X_obs,
+    "results": results
+}
+
+pickle_file_path = os.path.join(output_dir, "simulation_results.pkl")
+with open(pickle_file_path, "wb") as f:
+    pickle.dump(output_data, f)
+
+print(f"Results saved to {pickle_file_path}")

@@ -1,7 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 
-def plot_trajectories(ts_true, x_true, results, ts_obs, X_obs, trans_func=lambda x: x, caption_text=""):
+def plot_trajectories(ts_true, x_true, results, ts_obs, X_obs, trans_func=lambda x: x, caption_text="", output_dir=None):
     """
     Plot the predicted trajectories against ground truth and noisy observations.
 
@@ -43,10 +43,14 @@ def plot_trajectories(ts_true, x_true, results, ts_obs, X_obs, trans_func=lambda
     fig.legend(handles, labels, loc="upper center", ncol=5, fontsize=10)
     fig.text(0.5, 0.01, caption_text, ha='center', fontsize=10, color='gray')
     plt.tight_layout(rect=[0, 0, 1, 0.95])
-    plt.show()
+    if output_dir:
+        plt.savefig(f"{output_dir}/f{caption_text.replace(' ', '_')}.png")
+    else:
+        plt.show()
 
 
-def plot_trace(thetas_samps, true_values=None, param_names=["$\\beta$", "$\\gamma$", "$\\sigma$"], caption_text=""):
+def plot_trace(thetas_samps, true_values=None, param_names=["$\\beta$", "$\\gamma$", "$\\sigma$"],
+               caption_text="", output_dir=None):
     """
     Plot trace plots and histograms for sampled parameters.
 
@@ -87,9 +91,13 @@ def plot_trace(thetas_samps, true_values=None, param_names=["$\\beta$", "$\\gamm
     # Label the x-axis of the trace plots at the bottom row
     ax[-1, 0].set_xlabel("Iteration")
     fig.text(0.5, 0.01, caption_text, ha='center', fontsize=10, color='gray')
-
     plt.tight_layout()
-    plt.show()
+
+    if output_dir:
+        plt.savefig(f"{output_dir}/{caption_text.replace(' ', '_')}.png")
+    else:
+        plt.show()
+
 
 def print_parameter_estimates(results, true_values):
     """
