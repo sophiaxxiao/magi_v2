@@ -103,7 +103,16 @@ x_true = np.log(x_true)
 plot_trajectories(ts_true, x_true, results, ts_obs, X_obs, caption_text="MAGI on log-scale SEIR")
 plot_trajectories(ts_true, x_true, results, ts_obs, X_obs, trans_func=np.exp, caption_text="MAGI on original-scale SEIR")
 print_parameter_estimates(results, [6.0, 0.6, 1.8])
-plot_trace(results["thetas_samps"], [6.0, 0.6, 1.8], ["beta", "gamma", "sigma"],
+
+theta_samples = results["thetas_samps"]  # Shape: (num_samples, 3)
+beta_samples = theta_samples[:, 0]
+gamma_samples = theta_samples[:, 1]
+sigma_samples = theta_samples[:, 2]
+# Calculate R0 samples
+R0_samples = beta_samples / (gamma_samples + sigma_samples)
+theta_samples = np.hstack([theta_samples, R0_samples.reshape(-1, 1)])
+
+plot_trace(theta_samples, [6.0, 0.6, 1.8, (6.0 / (0.6 + 1.8))], ["beta", "gamma", "sigma", "R0"],
            "trace plot for theta in MAGI")
 
 
