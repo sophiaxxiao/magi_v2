@@ -158,7 +158,7 @@ Xhat_init_combined = np.vstack([Xhat_init_in, Xhat_init_out_log])
 model.Xhat_init = Xhat_init_combined
 
 # Now run prediction again for the extended time period
-results_forecast = model.predict(num_results=10000, num_burnin_steps=5000, tempering=False, verbose=True)
+results_forecast = model.predict(num_results=100000, num_burnin_steps=5000, tempering=False, verbose=True)
 
 # plot
 raw_data = orig_data.query(f"t <= {t_forecast_end}")
@@ -169,8 +169,6 @@ x_true = np.log(x_true)
 # results_forecast now contains posterior samples for the entire time range [0,4], including the forecasted portion.
 
 # Optionally, we can visualize the forecast:
-plot_trajectories(ts_true, x_true, results_forecast, ts_obs, X_obs)
-plot_trajectories(ts_true, x_true, results_forecast, ts_obs, X_obs, trans_func=np.exp)
 plot_trace(results_forecast["thetas_samps"], [6.0, 0.6, 1.8], ["beta", "gamma", "sigma"])
 
 sol_mle = solve_ivp(fun=lambda t, y: ODE_log_scale(t, y, final_thetas),
