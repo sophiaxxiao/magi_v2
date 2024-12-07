@@ -129,4 +129,4 @@ def mle(ts_obs, X_obs_full, maxiter=1000):
 
     final_thetas = [beta_est, gamma_est, sigma_est]
     X0_final = np.array([logE0_est, logI0_est, logR0_est])
-    return final_thetas, X0_final
+    return final_thetas, X0_final, res.fun
