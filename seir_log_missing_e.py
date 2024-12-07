@@ -158,10 +158,10 @@ Xhat_init_combined = np.vstack([Xhat_init_in, Xhat_init_out_log])
 model.Xhat_init = Xhat_init_combined
 
 # Now run prediction again for the extended time period
-results_forecast = model.predict(num_results=1000, num_burnin_steps=5000, tempering=False, verbose=True)
+results_forecast = model.predict(num_results=10000, num_burnin_steps=5000, tempering=False, verbose=True)
 
 # plot
-raw_data = pd.read_csv('tfpigp/data/logSEIR_beta=6.0_gamma=0.6_sigma=1.8_alpha=0.15_seed=2.csv').query(f"t <= {t_forecast_end}")
+raw_data = orig_data.query(f"t <= {t_forecast_end}")
 ts_true = raw_data.t.values
 x_true = raw_data[["E_true", "I_true", "R_true"]]
 x_true = np.log(x_true)
