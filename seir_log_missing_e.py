@@ -64,7 +64,7 @@ X_obs = np.log(obs_data[["E_obs", "I_obs", "R_obs"]].to_numpy().astype(np.float6
 X_obs[:,0] = np.nan
 
 # benchmark MLE
-final_thetas, X0_final, loss = mle(ts_obs, X_obs, maxiter=1000)
+final_thetas, X0_final, sigma_obs_est, loss, intervel_est = mle(ts_obs, X_obs, maxiter=1000)
 
 
 # Create the MAGI-TFP model
