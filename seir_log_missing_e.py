@@ -6,7 +6,7 @@ from IPython.display import clear_output
 import tfpigp.magi_v2 as magi_v2  # MAGI-TFP class for Bayesian inference
 from tfpigp.visualization import *
 from scipy.integrate import solve_ivp
-from tfpigp.mle import mle
+from tfpigp.mle import mle, metropolis_hastings
 
 # Define the EIR representation ODE on the log scale
 def f_vec(t, X, thetas):
@@ -64,7 +64,49 @@ X_obs = np.log(obs_data[["E_obs", "I_obs", "R_obs"]].to_numpy().astype(np.float6
 X_obs[:,0] = np.nan
 
 # benchmark MLE
-final_thetas, X0_final, sigma_obs_est, loss, intervel_est = mle(ts_obs, X_obs, maxiter=1000)
+final_thetas, X0_final, sigma_obs_est, loss, intervel_est, optim = mle(ts_obs, X_obs, maxiter=1000)
+n_samples = 5000
+# params = [log_beta, log_gamma, log_sigma, logE0, logI0, logR0, log_sigma_obs]
+initial_params = np.concatenate([np.log(final_thetas), X0_final, [np.log(sigma_obs_est)]])
+proposal_cov = 0.01 * optim.hess_inv.todense()
+chain, acceptance_rate = metropolis_hastings(initial_params, n_samples, proposal_cov, ts_obs, X_obs[:, 1], X_obs[:, 2])
+
+print("Acceptance rate:", acceptance_rate)
+# Discard burn-in
+burn_in = 1000
+samples = chain[burn_in:]
+
+param_names = ["log_beta", "log_gamma", "log_sigma", "logE0", "logI0", "logR0", "log_sigma_obs"]
+means = samples.mean(axis=0)
+print("Posterior means (log scale):")
+for name, mean_val in zip(param_names, means):
+    print(f"{name}: {mean_val:.4f}")
+
+# Convert to natural scale for some parameters
+beta_est = np.exp(means[0])
+gamma_est = np.exp(means[1])
+sigma_est = np.exp(means[2])
+E0_est = np.exp(means[3])
+I0_est = np.exp(means[4])
+R0_est = np.exp(means[5])
+sigma_obs_est = np.exp(means[6])
+
+print("\nPosterior means (natural scale):")
+print("beta:", beta_est)
+print("gamma:", gamma_est)
+print("sigma:", sigma_est)
+print("E0:", E0_est)
+print("I0:", I0_est)
+print("R0:", R0_est)
+print("sigma_obs:", sigma_obs_est)
+
+# Plot trace for a parameter as a quick diagnostic
+plt.figure(figsize=(10,4))
+plt.plot(chain[:,6])
+plt.title("Trace for log_beta")
+plt.xlabel("Iteration")
+plt.ylabel("log_beta")
+plt.show()
 
 
 # Create the MAGI-TFP model
