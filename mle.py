@@ -201,3 +201,131 @@ def metropolis_hastings(initial_params, n_samples, proposal_cov, ts_obs, logI_ob
 
     acceptance_rate = accepted / (n_samples - 1)
     return chain, acceptance_rate
+
+
+def simulate_trajectory(params, t_eval):
+    """
+    Given a set of log-scale parameters and initial conditions, simulate the ODE trajectory.
+    params: [log_beta, log_gamma, log_sigma, logE0, logI0, logR0, log_sigma_obs]
+    t_eval: array of times to evaluate solution
+    Returns: E(t), I(t), R(t) on the original (not log) scale.
+    """
+    log_beta, log_gamma, log_sigma, logE0, logI0, logR0, log_sigma_obs = params
+    beta = np.exp(log_beta)
+    gamma = np.exp(log_gamma)
+    sigma = np.exp(log_sigma)
+    thetas = np.array([beta, gamma, sigma])
+    X0 = np.array([logE0, logI0, logR0])
+    sol = solve_ivp(lambda t, y: ODE_log_scale(t, y, thetas), (t_eval[0], t_eval[-1]), X0, t_eval=t_eval, rtol=1e-9, atol=1e-9)
+    E = np.exp(sol.y[0])
+    I = np.exp(sol.y[1])
+    R = np.exp(sol.y[2])
+    return E, I, R
+
+
+def plot_mcmc(samples, raw_data, X_obs, ts_obs, final_thetas, X0_final, t_max=2.0, n_pred_samples=1000, caption_text="MCMC on MLE"):
+    # Extract parameter names and indices
+    # Define a fine time grid for plotting
+    t_fine = np.linspace(ts_obs[0], t_max, 200)
+
+    # Sample a subset of posterior samples (to reduce computational cost if needed)
+    idxs = np.random.choice(samples.shape[0], size=n_pred_samples, replace=False)
+    E_pred_samples = []
+    I_pred_samples = []
+    R_pred_samples = []
+
+    for i in idxs:
+        E_, I_, R_ = simulate_trajectory(samples[i], t_fine)
+        E_pred_samples.append(E_)
+        I_pred_samples.append(I_)
+        R_pred_samples.append(R_)
+
+    E_pred_samples = np.array(E_pred_samples)  # shape: (n_pred_samples, len(t_fine))
+    I_pred_samples = np.array(I_pred_samples)
+    R_pred_samples = np.array(R_pred_samples)
+
+    # Compute posterior mean and 95% credible intervals
+    E_mean = np.mean(E_pred_samples, axis=0)
+    I_mean = np.mean(I_pred_samples, axis=0)
+    R_mean = np.mean(R_pred_samples, axis=0)
+
+    E_lower = np.percentile(E_pred_samples, 2.5, axis=0)
+    E_upper = np.percentile(E_pred_samples, 97.5, axis=0)
+
+    I_lower = np.percentile(I_pred_samples, 2.5, axis=0)
+    I_upper = np.percentile(I_pred_samples, 97.5, axis=0)
+
+    R_lower = np.percentile(R_pred_samples, 2.5, axis=0)
+    R_upper = np.percentile(R_pred_samples, 97.5, axis=0)
+
+    # Plot
+    fig, axes = plt.subplots(1, 3, figsize=(12, 4))
+
+    # Ground truth (if available)
+    if 'E_true' in raw_data.columns:
+        E_true = raw_data.query("t <= @t_max")['E_true'].values
+        I_true = raw_data.query("t <= @t_max")['I_true'].values
+        R_true = raw_data.query("t <= @t_max")['R_true'].values
+        t_true = raw_data.query("t <= @t_max")['t'].values
+        axes[0].plot(t_true, E_true, 'k-', label='Ground Truth')
+        axes[1].plot(t_true, I_true, 'k-', label='Ground Truth')
+        axes[2].plot(t_true, R_true, 'k-', label='Ground Truth')
+
+    # Posterior Mean and intervals
+    axes[0].plot(t_fine, E_mean, color='blue', label='Mean Prediction')
+    axes[0].fill_between(t_fine, E_lower, E_upper, color='blue', alpha=0.3, label='95% Predictive Interval')
+
+    axes[1].plot(t_fine, I_mean, color='blue', label='Mean Prediction')
+    axes[1].fill_between(t_fine, I_lower, I_upper, color='blue', alpha=0.3, label='95% Predictive Interval')
+
+    axes[2].plot(t_fine, R_mean, color='blue', label='Mean Prediction')
+    axes[2].fill_between(t_fine, R_lower, R_upper, color='blue', alpha=0.3, label='95% Predictive Interval')
+
+    # Observations
+    axes[0].scatter(ts_obs, X_obs[:, 0], color='gray', alpha=0.8, label='Noisy Observations')
+    axes[1].scatter(ts_obs, X_obs[:, 1], color='gray', alpha=0.8, label='Noisy Observations')
+    axes[2].scatter(ts_obs, X_obs[:, 2], color='gray', alpha=0.8, label='Noisy Observations')
+
+    # Initialization (e.g., from MLE solution)
+    beta_est, gamma_est, sigma_est = final_thetas
+    X0_est = X0_final
+    thetas_init = [beta_est, gamma_est, sigma_est]
+    sol_init = solve_ivp(lambda t, y: ODE_log_scale(t, y, thetas_init), (t_fine[0], t_fine[-1]), X0_est, t_eval=t_fine,
+                         rtol=1e-10, atol=1e-10)
+    E_init = np.exp(sol_init.y[0])
+    I_init = np.exp(sol_init.y[1])
+    R_init = np.exp(sol_init.y[2])
+
+    axes[0].plot(t_fine, E_init, '--', color='green', label='Initialization')
+    axes[1].plot(t_fine, I_init, '--', color='green', label='Initialization')
+    axes[2].plot(t_fine, R_init, '--', color='green', label='Initialization')
+
+    axes[0].set_title("Component E_true")
+    axes[1].set_title("Component I_true")
+    axes[2].set_title("Component R_true")
+
+    axes[0].set_xlabel("t")
+    axes[1].set_xlabel("t")
+    axes[2].set_xlabel("t")
+
+    axes[0].set_ylabel("E_true")
+    axes[1].set_ylabel("I_true")
+    axes[2].set_ylabel("R_true")
+
+    # Combine legends
+    handles, labels = axes[0].get_legend_handles_labels()
+    # Just ensure we get all unique labels
+    handles2, labels2 = axes[1].get_legend_handles_labels()
+    handles += handles2
+    labels += labels2
+    handles3, labels3 = axes[2].get_legend_handles_labels()
+    handles += handles3
+    labels += labels3
+
+    by_label = dict(zip(labels, handles))
+    fig.legend(by_label.values(), by_label.keys(), loc='upper center', ncol=5)
+
+    fig.text(0.5, 0.01, caption_text, ha='center', fontsize=10, color='gray')
+
+    plt.tight_layout(rect=[0, 0, 1, 0.9])
+    plt.show()

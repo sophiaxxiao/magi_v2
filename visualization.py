@@ -45,7 +45,7 @@ def plot_trajectories(ts_true, x_true, results, ts_obs, X_obs, trans_func=lambda
     plt.show()
 
 
-def plot_trace(thetas_samps, true_values=None, param_names=["$\\beta$", "$\\gamma$", "$\\sigma$"]):
+def plot_trace(thetas_samps, true_values=None, param_names=["$\\beta$", "$\\gamma$", "$\\sigma$"], caption_text=""):
     """
     Plot trace plots and histograms for sampled parameters.
 
@@ -85,6 +85,7 @@ def plot_trace(thetas_samps, true_values=None, param_names=["$\\beta$", "$\\gamm
 
     # Label the x-axis of the trace plots at the bottom row
     ax[-1, 0].set_xlabel("Iteration")
+    fig.text(0.5, 0.01, caption_text, ha='center', fontsize=10, color='gray')
 
     plt.tight_layout()
     plt.show()

@@ -6,7 +6,7 @@ from IPython.display import clear_output
 import tfpigp.magi_v2 as magi_v2  # MAGI-TFP class for Bayesian inference
 from tfpigp.visualization import *
 from scipy.integrate import solve_ivp
-from tfpigp.mle import mle, metropolis_hastings
+from tfpigp.mle import mle, metropolis_hastings, plot_mcmc
 
 # Define the EIR representation ODE on the log scale
 def f_vec(t, X, thetas):
@@ -54,7 +54,8 @@ d_obs = 20  # Observations per unit time
 t_max = 2.0  # Observation interval length
 
 # Load data and select observations
-raw_data = pd.read_csv('tfpigp/data/logSEIR_beta=6.0_gamma=0.6_sigma=1.8_alpha=0.15_seed=2.csv').query(f"t <= {t_max}")
+orig_data = pd.read_csv('tfpigp/data/logSEIR_beta=6.0_gamma=0.6_sigma=1.8_alpha=0.15_seed=2.csv')
+raw_data = orig_data.query(f"t <= {t_max}")
 obs_data = raw_data.iloc[::int((raw_data.index.shape[0] - 1) / (d_obs * t_max))]
 
 # Extract observation times and log-transformed noisy observations
@@ -76,38 +77,10 @@ print("Acceptance rate:", acceptance_rate)
 burn_in = 1000
 samples = chain[burn_in:]
 
-param_names = ["log_beta", "log_gamma", "log_sigma", "logE0", "logI0", "logR0", "log_sigma_obs"]
-means = samples.mean(axis=0)
-print("Posterior means (log scale):")
-for name, mean_val in zip(param_names, means):
-    print(f"{name}: {mean_val:.4f}")
-
-# Convert to natural scale for some parameters
-beta_est = np.exp(means[0])
-gamma_est = np.exp(means[1])
-sigma_est = np.exp(means[2])
-E0_est = np.exp(means[3])
-I0_est = np.exp(means[4])
-R0_est = np.exp(means[5])
-sigma_obs_est = np.exp(means[6])
-
-print("\nPosterior means (natural scale):")
-print("beta:", beta_est)
-print("gamma:", gamma_est)
-print("sigma:", sigma_est)
-print("E0:", E0_est)
-print("I0:", I0_est)
-print("R0:", R0_est)
-print("sigma_obs:", sigma_obs_est)
-
-# Plot trace for a parameter as a quick diagnostic
-plt.figure(figsize=(10,4))
-plt.plot(chain[:,6])
-plt.title("Trace for log_beta")
-plt.xlabel("Iteration")
-plt.ylabel("log_beta")
-plt.show()
-
+plot_mcmc(samples, orig_data, np.exp(X_obs), ts_obs, final_thetas, X0_final, t_max=4.0, n_pred_samples=400,
+          caption_text="MCMC on MLE likelihood")
+plot_trace(np.exp(samples[:, :3]), [6.0, 0.6, 1.8], ["beta", "gamma", "sigma"],
+           "trace plot for theta in MCMC on MLE likelihood")
 
 # Create the MAGI-TFP model
 model = magi_v2.MAGI_v2(D_thetas=3, ts_obs=ts_obs, X_obs=X_obs, bandsize=None, f_vec=f_vec)
