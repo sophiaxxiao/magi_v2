@@ -164,4 +164,40 @@ def mle(ts_obs, X_obs_full, maxiter=1000):
     for i, p in enumerate(param_names):
         print(f"{p}: [{lower_nat[i]:.4f}, {upper_nat[i]:.4f}]")
 
-    return final_thetas, X0_final, sigma_obs_est, res.fun, (res.x, se, lower_nat, upper_nat)
+    return final_thetas, X0_final, sigma_obs_est, res.fun, (res.x, se, lower_nat, upper_nat), res
+
+##############################
+# Metropolis-Hastings Sampler
+##############################
+def metropolis_hastings(initial_params, n_samples, proposal_cov, ts_obs, logI_obs, logR_obs):
+    # log_posterior is proportional to -NLL, so we can just use negative_log_likelihood and convert
+    # For MH, we actually only need NLL and use exp(-NLL)
+    # We'll store samples in a chain:
+    chain = np.zeros((n_samples, len(initial_params)))
+    chain[0] = initial_params
+
+    current_params = initial_params.copy()
+    current_nll = negative_log_likelihood(current_params, ts_obs, logI_obs, logR_obs)
+    accepted = 0
+
+    for i in range(1, n_samples):
+        # Propose new parameters
+        proposal = np.random.multivariate_normal(current_params, proposal_cov)
+        # Compute NLL for proposal
+        proposal_nll = negative_log_likelihood(proposal, ts_obs, logI_obs, logR_obs)
+
+        # Metropolis criterion
+        # alpha = exp(-(proposal_nll - current_nll)) = exp(-proposal_nll)/exp(-current_nll)
+        # If alpha >= 1, accept. If alpha < 1, accept with probability alpha.
+        alpha = np.exp(-(proposal_nll - current_nll))
+
+        if np.random.rand() < alpha:
+            # Accept
+            current_params = proposal
+            current_nll = proposal_nll
+            accepted += 1
+
+        chain[i] = current_params
+
+    acceptance_rate = accepted / (n_samples - 1)
+    return chain, acceptance_rate
