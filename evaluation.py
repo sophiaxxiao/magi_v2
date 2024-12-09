@@ -28,7 +28,7 @@ def compute_rmse(true_values, inferred_samples, observed_indices):
     return rmse
 
 
-def compute_log_rmse(true_values_log, inferred_samples, observed_indices):
+def compute_log_rmse(true_values_log, inferred_samples):
     """
     Compute RMSE on the log scale.
 
@@ -41,13 +41,13 @@ def compute_log_rmse(true_values_log, inferred_samples, observed_indices):
     - float: RMSE on log scale.
     """
     # Extract true log values at observed points
-    true_obs_log = true_values_log[observed_indices]
+    true_obs_log = true_values_log
 
     # Compute the mean inferred log trajectory
-    inferred_mean_log = inferred_samples.mean(axis=0)[observed_indices]
+    inferred_mean_log = inferred_samples.mean(axis=0)
 
     # Calculate RMSE
-    mse_log = np.mean((true_obs_log - inferred_mean_log) ** 2)
+    mse_log = np.mean((true_obs_log - inferred_mean_log) ** 2, axis=0)
     rmse_log = np.sqrt(mse_log)
     return rmse_log
 
@@ -116,16 +116,16 @@ def summarize_simulation_results(results_dir, true_params, observed_time_points)
                 results = data["results"]  # Contains "thetas_samps", "X_samps", etc.
 
                 # Identify observed time indices
-                observed_indices = np.isin(ts_true, observed_time_points).nonzero()[0]
+                observed_indices_in_true = np.isin(np.round(ts_true, 5), np.round(observed_time_points, 5)).nonzero()[0]
+                observed_indices_in_I = np.isin(np.round(results['I'], 5), np.round(observed_time_points, 5)).nonzero()[0]
 
                 # Compute RMSE on log scale
                 X_samps = results["X_samps"]  # Shape (num_samples, T, D)
-                rmse_log = compute_log_rmse(x_true, X_samps, observed_indices)
+                rmse_log = compute_log_rmse(x_true.loc[observed_indices_in_true, :], X_samps[:, observed_indices_in_I, :])
 
                 # Compute parameter estimation errors
                 thetas_samps = results["thetas_samps"]  # Shape (num_samples, P)
                 param_errors = compute_parameter_error(true_params, thetas_samps)
-                param_rmse = compute_parameter_rmse(true_params, thetas_samps)
 
                 # Append results to summary
                 summary.append({
@@ -134,9 +134,6 @@ def summarize_simulation_results(results_dir, true_params, observed_time_points)
                     "Beta_Error": param_errors[0],
                     "Gamma_Error": param_errors[1],
                     "Sigma_Error": param_errors[2],
-                    "Beta_RMSE": param_rmse[0],
-                    "Gamma_RMSE": param_rmse[1],
-                    "Sigma_RMSE": param_rmse[2]
                 })
 
     # Convert summary to DataFrame
