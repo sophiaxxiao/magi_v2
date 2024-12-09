@@ -2,6 +2,7 @@ import os
 import pickle
 import numpy as np
 import pandas as pd
+import matplotlib.pyplot as plt
 
 
 def compute_rmse(true_values, inferred_samples, observed_indices):
@@ -141,3 +142,177 @@ def summarize_simulation_results(results_dir, true_params, observed_time_points)
     # Convert summary to DataFrame
     summary_df = pd.DataFrame(summary)
     return summary_df
+
+
+def generate_latex_table(summary_df, output_path="summary_table.tex"):
+    """
+    Generate a LaTeX table from the summary DataFrame.
+
+    Parameters:
+    - summary_df (pd.DataFrame): Summary DataFrame with error metrics.
+    - output_path (str): Path to save the LaTeX table.
+
+    Returns:
+    - None
+    """
+    # Select columns excluding 'Simulation'
+    metrics = summary_df.columns.drop("Simulation")
+
+    # Compute mean and std of absolute values
+    mean_values = np.abs(summary_df[metrics]).mean()
+    std_values = np.abs(summary_df[metrics]).std()
+
+    # Create a new DataFrame for the table
+    table_df = pd.DataFrame({
+        "Metric": metrics,
+        "Mean Absolute Error": mean_values.values,
+        "Std Dev": std_values.values
+    })
+
+    # Round the values for better presentation
+    table_df["Mean Absolute Error"] = table_df["Mean Absolute Error"].round(4)
+    table_df["Std Dev"] = table_df["Std Dev"].round(4)
+
+    # Generate LaTeX table
+    latex_table = table_df.to_latex(index=False, caption="Summary of Simulation Results", label="tab:summary_simulation_results", column_format="lcc", float_format="%.4f")
+
+    # Save to file
+    with open(output_path, "w") as f:
+        f.write(latex_table)
+
+    print(f"LaTeX table saved to {output_path} as \n{latex_table}")
+
+def visualize_forecast_means(results_dir, observed_time_points, output_dir="visualizations"):
+    """
+    Visualize the aggregated forecasted trajectories across all simulations.
+
+    Parameters:
+    - results_dir (str): Path to the directory containing simulation result subdirectories.
+    - observed_time_points (np.array): Array of observed time points.
+    - output_dir (str): Directory to save the plots.
+
+    Returns:
+    - None
+    """
+    os.makedirs(output_dir, exist_ok=True)
+
+    # Initialize lists to collect posterior mean trajectories from each dataset
+    all_posterior_means = []
+
+    # Iterate through each simulation directory
+    for sim_dir in os.listdir(results_dir):
+        sim_path = os.path.join(results_dir, sim_dir)
+        if os.path.isdir(sim_path):
+            pickle_file = os.path.join(sim_path, "simulation_results.pkl")
+            if os.path.exists(pickle_file):
+                try:
+                    with open(pickle_file, "rb") as f:
+                        data = pickle.load(f)
+                except Exception as e:
+                    print(f"Error loading {pickle_file}: {e}")
+                    continue
+
+                results_forecast = data["results_forecast"]
+                X_samps = results_forecast["X_samps"]  # Shape (num_samples, T_forecast, D)
+
+                # Compute posterior mean for this dataset
+                posterior_mean = X_samps.mean(axis=0)  # Shape (T_forecast, D)
+                all_posterior_means.append(posterior_mean)
+
+    if not all_posterior_means:
+        print("No forecast data found.")
+        return
+
+    # Convert list to numpy array
+    # Shape: (num_datasets, T_forecast, D)
+    all_posterior_means = np.array(all_posterior_means)
+
+    num_datasets, T_forecast, D = all_posterior_means.shape
+
+    # Compute aggregated statistics across datasets
+    # Mean across datasets: Shape (T_forecast, D)
+    aggregated_mean = np.mean(all_posterior_means, axis=0)
+
+    # 2.5th and 97.5th percentiles across datasets: Shape (T_forecast, D)
+    lower_quantile = np.percentile(all_posterior_means, 2.5, axis=0)
+    upper_quantile = np.percentile(all_posterior_means, 97.5, axis=0)
+
+    # Assume the time points are the same across simulations
+    # Extract from one of the simulations
+    sample_sim_dirs = [d for d in os.listdir(results_dir) if os.path.isdir(os.path.join(results_dir, d))]
+    if not sample_sim_dirs:
+        print("No simulation directories found for extracting time points.")
+        return
+
+    sample_sim_path = os.path.join(results_dir, sample_sim_dirs[0])
+    sample_pickle_file = os.path.join(sample_sim_path, "simulation_results.pkl")
+    try:
+        with open(sample_pickle_file, "rb") as f:
+            sample_data = pickle.load(f)
+        ts_forecast = sample_data["results_forecast"]["I"].flatten()  # Shape (T_forecast,)
+    except Exception as e:
+        print(f"Error loading {sample_pickle_file} for time points: {e}")
+        return
+
+    # Create a DataFrame for plotting
+    plot_df = pd.DataFrame({
+        "Time": ts_forecast,
+        "E_mean": aggregated_mean[:, 0],
+        "E_lower": lower_quantile[:, 0],
+        "E_upper": upper_quantile[:, 0],
+        "I_mean": aggregated_mean[:, 1],
+        "I_lower": lower_quantile[:, 1],
+        "I_upper": upper_quantile[:, 1],
+        "R_mean": aggregated_mean[:, 2],
+        "R_lower": lower_quantile[:, 2],
+        "R_upper": upper_quantile[:, 2],
+    })
+
+    # Plot settings
+    compartments = ["E", "I", "R"]
+    colors = {"E": "blue", "I": "green", "R": "red"}
+
+    for compartment in compartments:
+        plt.figure(figsize=(10, 6))
+        plt.plot(plot_df["Time"], plot_df[f"{compartment}_mean"], label=f"Mean {compartment}", color=colors[compartment])
+        plt.fill_between(plot_df["Time"], plot_df[f"{compartment}_lower"], plot_df[f"{compartment}_upper"], color=colors[compartment], alpha=0.3, label="95% CI")
+        plt.title(f"Aggregated Forecasted Trajectory for {compartment}")
+        plt.xlabel("Time")
+        plt.ylabel(f"log({compartment})")
+        plt.legend()
+        plt.tight_layout()
+        plt.savefig(os.path.join(output_dir, f"{compartment}_aggregated_forecast.png"))
+        plt.close()
+        print(f"Saved aggregated forecast plot for {compartment} to {output_dir}")
+
+    # Optionally, plot the average of the posterior means across datasets with true trajectories
+    # Uncomment the following block if you wish to include true trajectories in the plots
+
+    # Load true trajectories from one simulation (assuming all have the same ts_true)
+    try:
+        with open(sample_pickle_file, "rb") as f:
+            sample_data = pickle.load(f)
+        ts_true = sample_data["ts_true"]
+        x_true = sample_data["x_true"]
+        if not isinstance(x_true, pd.DataFrame):
+            x_true = pd.DataFrame(x_true, columns=["E_true", "I_true", "R_true"])
+        true_forecast = x_true.copy()
+        true_forecast.index = ts_true
+    except Exception as e:
+        print(f"Error loading true trajectories: {e}")
+        true_forecast = None
+
+    for compartment in compartments:
+        plt.figure(figsize=(10, 6))
+        plt.plot(plot_df["Time"], plot_df[f"{compartment}_mean"], label=f"Mean {compartment}", color=colors[compartment])
+        plt.fill_between(plot_df["Time"], plot_df[f"{compartment}_lower"], plot_df[f"{compartment}_upper"], color=colors[compartment], alpha=0.3, label="95% CI")
+        if true_forecast is not None:
+            plt.plot(true_forecast.index, true_forecast[f"{compartment}_true"], label=f"True {compartment}", color="black", linestyle="-")
+        plt.title(f"Aggregated Forecasted Trajectory for {compartment}")
+        plt.xlabel("Time")
+        plt.ylabel(f"log({compartment})")
+        plt.legend()
+        plt.tight_layout()
+        plt.savefig(os.path.join(output_dir, f"{compartment}_aggregated_forecast_with_true.png"))
+        plt.close()
+        print(f"Saved aggregated forecast plot with true trajectory for {compartment} to {output_dir}")
