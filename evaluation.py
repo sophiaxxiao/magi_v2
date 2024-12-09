@@ -128,6 +128,9 @@ def summarize_simulation_results(results_dir, true_params, observed_time_points)
                 thetas_samps = results["thetas_samps"]  # Shape (num_samples, P)
                 param_errors = compute_parameter_error(true_params, thetas_samps)
 
+                # Compute parameter coverage
+                coverage = compute_coverage(true_params, thetas_samps, confidence_level=95)
+
                 # Append results to summary
                 summary.append({
                     "Simulation": sim_dir,
@@ -137,6 +140,9 @@ def summarize_simulation_results(results_dir, true_params, observed_time_points)
                     "Beta_Error": param_errors[0],
                     "Gamma_Error": param_errors[1],
                     "Sigma_Error": param_errors[2],
+                    "Beta_Coverage": coverage["Beta_Coverage"],
+                    "Gamma_Coverage": coverage["Gamma_Coverage"],
+                    "Sigma_Coverage": coverage["Sigma_Coverage"],
                 })
 
     # Convert summary to DataFrame
@@ -400,3 +406,26 @@ def visualize_forecast_means(results_dir, observed_time_points, output_dir="visu
     plt.savefig(os.path.join(output_dir, f"orig_aggregated_forecast_with_true_and_sample_obs.png"))
     plt.close()
     print(f"Aggregated forecast figure saved to {output_dir}")
+
+
+def compute_coverage(true_params, inferred_samples, confidence_level=95):
+    """
+    Compute the coverage of the true parameters within the posterior intervals.
+
+    Parameters:
+    - true_params (list or np.array): True parameter values [beta, gamma, sigma].
+    - inferred_samples (np.array): Shape (num_samples, P), posterior samples of parameters.
+    - confidence_level (float): The confidence level for the interval (default is 95).
+
+    Returns:
+    - dict: Coverage information for each parameter.
+    """
+    lower_percentile = (100 - confidence_level) / 2
+    upper_percentile = 100 - lower_percentile
+    coverage = {}
+    for i, param in enumerate(['Beta', 'Gamma', 'Sigma']):
+        lower = np.percentile(inferred_samples[:, i], lower_percentile)
+        upper = np.percentile(inferred_samples[:, i], upper_percentile)
+        is_covered = lower <= true_params[i] <= upper
+        coverage[f"{param}_Coverage"] = is_covered
+    return coverage
