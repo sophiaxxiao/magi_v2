@@ -130,7 +130,9 @@ def summarize_simulation_results(results_dir, true_params, observed_time_points)
                 # Append results to summary
                 summary.append({
                     "Simulation": sim_dir,
-                    "RMSE_log": rmse_log,
+                    "RMSE_logE": rmse_log[0],
+                    "RMSE_logI": rmse_log[1],
+                    "RMSE_logR": rmse_log[2],
                     "Beta_Error": param_errors[0],
                     "Gamma_Error": param_errors[1],
                     "Sigma_Error": param_errors[2],
