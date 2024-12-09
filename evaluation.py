@@ -298,6 +298,17 @@ def visualize_forecast_means(results_dir, observed_time_points, output_dir="visu
             x_true = pd.DataFrame(x_true, columns=["E_true", "I_true", "R_true"])
         true_forecast = x_true.copy()
         true_forecast.index = ts_true
+
+        X_obs = data["X_obs"]  # Shape (observed_T, D)
+        ts_obs = observed_time_points  # Assuming observed_time_points align with X_obs
+        example_observations = X_obs  # Shape (observed_T, D)
+
+        # Extract true trajectory
+        x_true = data["x_true"]  # pd.DataFrame with ['E_true', 'I_true', 'R_true']
+        if not isinstance(x_true, pd.DataFrame):
+            x_true = pd.DataFrame(x_true, columns=["E_true", "I_true", "R_true"])
+        true_trajectory = x_true.values  # Shape (T, D)
+
     except Exception as e:
         print(f"Error loading true trajectories: {e}")
         true_forecast = None
@@ -316,3 +327,76 @@ def visualize_forecast_means(results_dir, observed_time_points, output_dir="visu
         plt.savefig(os.path.join(output_dir, f"{compartment}_aggregated_forecast_with_true.png"))
         plt.close()
         print(f"Saved aggregated forecast plot with true trajectory for {compartment} to {output_dir}")
+
+
+    # Initialize the figure with subplots
+    fig, axes = plt.subplots(3, 1, figsize=(12, 18), sharex=True)
+    plt.subplots_adjust(hspace=0.3)
+
+    for idx, compartment in enumerate(compartments):
+        ax = axes[idx]
+        # Plot aggregated mean trajectory
+        ax.plot(plot_df["Time"], plot_df[f"{compartment}_mean"], label=f"Mean {compartment}", color=colors[compartment])
+
+        # Shade the 95% confidence interval
+        ax.fill_between(plot_df["Time"], plot_df[f"{compartment}_lower"], plot_df[f"{compartment}_upper"],
+                        color=colors[compartment], alpha=0.3, label="95% CI")
+
+        # Plot true trajectory
+        if true_forecast is not None:
+            ax.plot(true_forecast.index, true_forecast[f"{compartment}_true"], label=f"True {compartment}", color="black", linestyle="-")
+
+        # Plot example dataset observations
+        if example_observations is not None:
+            # Find the indices in ts_forecast that correspond to observations
+            # Assuming observed_time_points are a subset of ts_forecast
+            observed_indices = np.isin(np.round(ts_forecast, 5), np.round(observed_time_points, 5))
+            ax.scatter(ts_obs, example_observations[:, idx], label="Example Observations", color="orange", marker='o', s=100, edgecolors='k')
+
+        ax.set_title(f"Forecasted Trajectory for {compartment}")
+        ax.set_xlabel("Time")
+        ax.set_ylabel(f"log({compartment})")
+        ax.legend()
+
+    plt.tight_layout()
+    plt.savefig(os.path.join(output_dir, f"log_aggregated_forecast_with_true_and_sample_obs.png"))
+    plt.close()
+    print(f"Aggregated forecast figure saved to {output_dir}")
+
+    plot_df.iloc[:,1:] = np.exp(plot_df.iloc[:,1:])
+    true_forecast = np.exp(true_forecast)
+    example_observations = np.exp(example_observations)
+
+    # Initialize the figure with subplots
+    fig, axes = plt.subplots(3, 1, figsize=(12, 18), sharex=True)
+    plt.subplots_adjust(hspace=0.3)
+
+    for idx, compartment in enumerate(compartments):
+        ax = axes[idx]
+        # Plot aggregated mean trajectory
+        ax.plot(plot_df["Time"], plot_df[f"{compartment}_mean"], label=f"Mean {compartment}", color=colors[compartment])
+
+        # Shade the 95% confidence interval
+        ax.fill_between(plot_df["Time"], plot_df[f"{compartment}_lower"], plot_df[f"{compartment}_upper"],
+                        color=colors[compartment], alpha=0.3, label="95% CI")
+
+        # Plot true trajectory
+        if true_forecast is not None:
+            ax.plot(true_forecast.index, true_forecast[f"{compartment}_true"], label=f"True {compartment}", color="black", linestyle="-")
+
+        # Plot example dataset observations
+        if example_observations is not None:
+            # Find the indices in ts_forecast that correspond to observations
+            # Assuming observed_time_points are a subset of ts_forecast
+            observed_indices = np.isin(np.round(ts_forecast, 5), np.round(observed_time_points, 5))
+            ax.scatter(ts_obs, example_observations[:, idx], label="Example Observations", color="orange", marker='o', s=100, edgecolors='k')
+
+        ax.set_title(f"Forecasted Trajectory for {compartment}")
+        ax.set_xlabel("Time")
+        ax.set_ylabel(f"log({compartment})")
+        ax.legend()
+
+    plt.tight_layout()
+    plt.savefig(os.path.join(output_dir, f"orig_aggregated_forecast_with_true_and_sample_obs.png"))
+    plt.close()
+    print(f"Aggregated forecast figure saved to {output_dir}")
