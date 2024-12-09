@@ -330,7 +330,7 @@ def visualize_forecast_means(results_dir, observed_time_points, output_dir="visu
 
 
     # Initialize the figure with subplots
-    fig, axes = plt.subplots(3, 1, figsize=(12, 18), sharex=True)
+    fig, axes = plt.subplots(1, 3, figsize=(12, 6), sharex=True)
     plt.subplots_adjust(hspace=0.3)
 
     for idx, compartment in enumerate(compartments):
@@ -368,7 +368,7 @@ def visualize_forecast_means(results_dir, observed_time_points, output_dir="visu
     example_observations = np.exp(example_observations)
 
     # Initialize the figure with subplots
-    fig, axes = plt.subplots(3, 1, figsize=(12, 18), sharex=True)
+    fig, axes = plt.subplots(1, 3, figsize=(12, 6), sharex=True)
     plt.subplots_adjust(hspace=0.3)
 
     for idx, compartment in enumerate(compartments):
