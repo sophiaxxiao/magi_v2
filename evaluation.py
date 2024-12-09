@@ -99,6 +99,8 @@ def summarize_simulation_results(results_dir, true_params, observed_time_points)
     - pd.DataFrame: Summary table with RMSE and parameter errors for each simulation.
     """
     summary = []
+    true_R0 = true_params[0] / (true_params[1] + true_params[2])  # R0 = beta / (gamma + sigma)
+    true_params = np.concatenate([true_params, [true_R0]])
 
     # Iterate through each simulation directory
     for sim_dir in os.listdir(results_dir):
@@ -126,6 +128,13 @@ def summarize_simulation_results(results_dir, true_params, observed_time_points)
 
                 # Compute parameter estimation errors
                 thetas_samps = results["thetas_samps"]  # Shape (num_samples, P)
+
+                beta_samples = thetas_samps[:, 0]
+                gamma_samples = thetas_samps[:, 1]
+                sigma_samples = thetas_samps[:, 2]
+                R0_samples = beta_samples / (gamma_samples + sigma_samples)
+                thetas_samps = np.hstack([thetas_samps, R0_samples.reshape(-1, 1)])
+
                 param_errors = compute_parameter_error(true_params, thetas_samps)
 
                 # Compute parameter coverage
@@ -140,9 +149,11 @@ def summarize_simulation_results(results_dir, true_params, observed_time_points)
                     "Beta_Error": param_errors[0],
                     "Gamma_Error": param_errors[1],
                     "Sigma_Error": param_errors[2],
+                    "R0_Error": param_errors[3],
                     "Beta_Coverage": coverage["Beta_Coverage"],
                     "Gamma_Coverage": coverage["Gamma_Coverage"],
                     "Sigma_Coverage": coverage["Sigma_Coverage"],
+                    "R0_Coverage": coverage["R0_Coverage"]
                 })
 
     # Convert summary to DataFrame
@@ -423,7 +434,7 @@ def compute_coverage(true_params, inferred_samples, confidence_level=95):
     lower_percentile = (100 - confidence_level) / 2
     upper_percentile = 100 - lower_percentile
     coverage = {}
-    for i, param in enumerate(['Beta', 'Gamma', 'Sigma']):
+    for i, param in enumerate(['Beta', 'Gamma', 'Sigma', 'R0']):
         lower = np.percentile(inferred_samples[:, i], lower_percentile)
         upper = np.percentile(inferred_samples[:, i], upper_percentile)
         is_covered = lower <= true_params[i] <= upper
