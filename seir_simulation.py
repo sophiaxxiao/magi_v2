@@ -3,7 +3,7 @@ import pandas as pd
 from scipy.integrate import solve_ivp
 
 # generate SEIR datasets
-for seed in range(20):
+for seed in range(20, 100):
     for alpha in [0.15]:
         # parameter set for beta, gamma, sigma
         for params in [(6.0, 0.6, 1.8)]:
