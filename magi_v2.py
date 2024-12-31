@@ -11,6 +11,9 @@ from typing import Union, Callable
 import time
 from tqdm.autonotebook import tqdm
 
+# Disable GPU entirely
+import os
+os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
 
 # main class for TFP-powered Manifold-Constrained Gaussian Processes Inference (PNAS, Yang, Wong, & Kou 2020).
 # source: https://www.pnas.org/doi/10.1073/pnas.2020397118
@@ -120,9 +123,9 @@ class MAGI_v2:
 
             # Eqn. 6 of PNAS paper
             C_d, m_d, K_d = self._build_matrices(self.I, hparams_obs["phi1s"][i], hparams_obs["phi2s"][i], v=2.01)
-            self.C_d_invs[d] = tf.linalg.pinv(C_d) # pinv equal to inv if invertible!
+            self.C_d_invs[d] = tf.linalg.pinv(C_d) # pinv equal to inv if invertible! THIS PART CAN BE OPTIMIZED!!! 
             self.m_ds[d] = m_d
-            self.K_d_invs[d] = tf.linalg.pinv(K_d)
+            self.K_d_invs[d] = tf.linalg.pinv(K_d) # THIS PART CAN BE OPTIMIZED!!! 
         
         #### FIT THETAS_INIT IF ALL COMPONENTS OBSERVED, ELSE POINT-ESTIMATE (UNOBSERVED COMPONENTS, THETA) JOINTLY
         
@@ -134,7 +137,8 @@ class MAGI_v2:
             
             # pre-compute our centered differences + reshape as needed for below function.
             X_cent = tf.reshape(self.Xhat_init - self.mu_ds, 
-                                shape=(self.Xhat_init.shape[0], 1, self.Xhat_init.shape[1]))
+                                shape=(self.Xhat_init.shape[0], 1, 
+                                       self.Xhat_init.shape[1]))
             m_ds_prod_X_cent = self.m_ds @ tf.transpose(X_cent, perm=[2, 0, 1])
             
             # create local version of f_vec, and assorted 
@@ -280,142 +284,145 @@ class MAGI_v2:
     '''
     # note that tqdm is not permissible because violates XLA-environment + tf.function.
     def predict(self, num_results: int = 1000, num_burnin_steps: int = 1000, sigma_sqs_LB=None, verbose=False):
-        
-        # make sure we are ready to do inference (i.e., no NaNs in initializations)
-        assert ~np.any(np.isnan(self.Xhat_init)), "Please make sure Xhat_init does not have NaNs."
-        assert ~np.any(np.isnan(self.sigma_sqs_init)), "Please make sure sigma_sqs_init does not have NaNs."
-        assert ~np.any(np.isnan(self.thetas_init)), "Please make sure thetas_init does not have NaNs."
-        
-        # to ensure tf.function compatibility, need to create local versions of some variables
-        mu_ds, C_d_invs, f_vec, I = self.mu_ds, self.C_d_invs, self.f_vec, self.I
-        m_ds, K_d_invs, N_ds, not_nan_idxs = self.m_ds, self.K_d_invs, self.N_ds, self.not_nan_idxs
-        y_tau_ds_observed, not_nan_cols, beta = self.y_tau_ds_observed, self.not_nan_cols, self.beta
-        
-        # compute a lower bound on what sigma_sq should be for each component for numerical stability
-        if sigma_sqs_LB is None:
-            sigma_sqs_LB = ((self.Xhat_init.std(axis=0)) * 0.01) ** 2
-        
-        '''
-        As of 11/25/2024, we will use temperature annealing to encourage more initial exploration.
-        - Will also constrain sigma_sq values to be at least sigma_sq_LB using softplus bijector.
-        - Will also constrain theta values to be positive for now using softplus bijector.
-        '''
-        # the FULL posterior distribution that we are sampling from (optimized for XLA, yay!)
-        def unnormalized_log_prob(X, sigma_sqs_pre, thetas_pre, beta_temp):
+        with tf.device('/CPU:0'): #    
+            # make sure we are ready to do inference (i.e., no NaNs in initializations)
+            assert ~np.any(np.isnan(self.Xhat_init)), "Please make sure Xhat_init does not have NaNs."
+            assert ~np.any(np.isnan(self.sigma_sqs_init)), "Please make sure sigma_sqs_init does not have NaNs."
+            assert ~np.any(np.isnan(self.thetas_init)), "Please make sure thetas_init does not have NaNs."
+            
+            # to ensure tf.function compatibility, need to create local versions of some variables
+            mu_ds, C_d_invs, f_vec, I = self.mu_ds, self.C_d_invs, self.f_vec, self.I
+            m_ds, K_d_invs, N_ds, not_nan_idxs = self.m_ds, self.K_d_invs, self.N_ds, self.not_nan_idxs
+            y_tau_ds_observed, not_nan_cols, beta = self.y_tau_ds_observed, self.not_nan_cols, self.beta
+            
+            # compute a lower bound on what sigma_sq should be for each component for numerical stability
+            if sigma_sqs_LB is None:
+                sigma_sqs_LB = ((self.Xhat_init.std(axis=0)) * 0.01) ** 2
+            
             '''
-            Takes in as input the following, and returns the unnormalized log-posterior
-            1. Our samples of the trajectory components X with dimensions |I| x D
-            2. sigma_sqs - a (|D|, ) vector of the noises on each component d.
-            3. thetas - the (d_thetas,) vector-type sample of the parameters governing our system
+            As of 11/25/2024, we will use temperature annealing to encourage more initial exploration.
+            - Will also constrain sigma_sq values to be at least sigma_sq_LB using softplus bijector.
+            - Will also constrain theta values to be positive for now using softplus bijector.
             '''
-            
-            # compute what the actual sigma_sqs is, after softplus transformation
-            sigma_sqs = tf.math.log(1.0 + tf.math.exp(sigma_sqs_pre)) + sigma_sqs_LB
-            thetas = tf.math.log(1.0 + tf.math.exp(thetas_pre))
-            
-            # also need to account for the change-of-variables via log-Jacobian for both sigma^2 and thetas
-            log_jacobian_sigma_sqs = tf.reduce_sum(sigma_sqs_pre - tf.math.log(1.0 + tf.math.exp(sigma_sqs_pre)))
-            log_jacobian_thetas = tf.reduce_sum(thetas_pre - tf.math.log(1.0 + tf.math.exp(thetas_pre)))
-            
-            # need to tell TensorFlow to not track gradients on beta_temp
-            beta_temp = tf.stop_gradient(beta_temp)
-            
-            # pre-compute our centered differences + reshape as needed
-            X_cent = tf.reshape(X - mu_ds, shape=(X.shape[0], 1, X.shape[1]))
+            # the FULL posterior distribution that we are sampling from (optimized for XLA, yay!)
+            def unnormalized_log_prob(X, sigma_sqs_pre, thetas_pre, beta_temp):
+                '''
+                Takes in as input the following, and returns the unnormalized log-posterior
+                1. Our samples of the trajectory components X with dimensions |I| x D
+                2. sigma_sqs - a (|D|, ) vector of the noises on each component d.
+                3. thetas - the (d_thetas,) vector-type sample of the parameters governing our system
+                '''
+                with tf.device('/CPU:0'):
 
-            # first term: ||x_D(I) - \mu_d(I)||_{C_d^-1}^2
-            t1 = tf.reduce_sum( (tf.transpose(X_cent) @ C_d_invs) @ tf.transpose(X_cent, perm=[2, 0, 1]) )
+                    # compute what the actual sigma_sqs is, after softplus transformation
+                    sigma_sqs = tf.math.log(1.0 + tf.math.exp(sigma_sqs_pre)) + sigma_sqs_LB
+                    thetas = tf.math.log(1.0 + tf.math.exp(thetas_pre))
+                    
+                    # also need to account for the change-of-variables via log-Jacobian for both sigma^2 and thetas
+                    log_jacobian_sigma_sqs = tf.reduce_sum(sigma_sqs_pre - tf.math.log(1.0 + tf.math.exp(sigma_sqs_pre)))
+                    log_jacobian_thetas = tf.reduce_sum(thetas_pre - tf.math.log(1.0 + tf.math.exp(thetas_pre)))
+                    
+                    # need to tell TensorFlow to not track gradients on beta_temp
+                    beta_temp = tf.stop_gradient(beta_temp)
+                    
+                    # pre-compute our centered differences + reshape as needed
+                    X_cent = tf.reshape(X - mu_ds, shape=(X.shape[0], 1, X.shape[1]))
 
-            # second term: ||f_{d, I} - \mudot_d(I) - m_d{ x_d(I) - \mu_d(I) }||_{K_d^-1}^2
-            f_vals = tf.transpose(f_vec(I, X, thetas)[:,None], perm=[2, 0, 1])
-            toNorm = f_vals - (m_ds @ tf.transpose(X_cent, perm=[2, 0, 1]))
-            t2 = tf.reduce_sum( tf.transpose(toNorm, perm=[0, 2, 1]) @ (K_d_invs @ toNorm) )
+                    # first term: ||x_D(I) - \mu_d(I)||_{C_d^-1}^2
+                    t1 = tf.reduce_sum( (tf.transpose(X_cent) @ C_d_invs) @ tf.transpose(X_cent, perm=[2, 0, 1]) )
 
-            # third term: N_d log(2\pi \sigma_d^2)
-            t3 = tf.reduce_sum(N_ds * tf.math.log(2.0*np.pi * sigma_sqs))
+                    # second term: ||f_{d, I} - \mudot_d(I) - m_d{ x_d(I) - \mu_d(I) }||_{K_d^-1}^2
+                    f_vals = tf.transpose(f_vec(I, X, thetas)[:,None], perm=[2, 0, 1])
+                    toNorm = f_vals - (m_ds @ tf.transpose(X_cent, perm=[2, 0, 1]))
+                    t2 = tf.reduce_sum( tf.transpose(toNorm, perm=[0, 2, 1]) @ (K_d_invs @ toNorm) )
 
-            # fourth term on ONLY THE ACTUAL OBSERVED VALUES!: ||x_d(\tau_d) - y_d(\tau_d)||_{\sigma_d^{-2}}^2
-            X_observed = tf.gather(tf.reshape(X, [-1]), not_nan_idxs)
-            t4 = tf.reduce_sum(tf.math.multiply(tf.square(X_observed - y_tau_ds_observed), 
-                                                tf.gather(1.0 / sigma_sqs, not_nan_cols)))
+                    # third term: N_d log(2\pi \sigma_d^2)
+                    t3 = tf.reduce_sum(N_ds * tf.math.log(2.0*np.pi * sigma_sqs))
+
+                    # fourth term on ONLY THE ACTUAL OBSERVED VALUES!: ||x_d(\tau_d) - y_d(\tau_d)||_{\sigma_d^{-2}}^2
+                    X_observed = tf.gather(tf.reshape(X, [-1]), not_nan_idxs)
+                    t4 = tf.reduce_sum(tf.math.multiply(tf.square(X_observed - y_tau_ds_observed), 
+                                                        tf.gather(1.0 / sigma_sqs, not_nan_cols)))
+                    
+                    # prior-temper using 1/beta: -0.5 * ( ((1/beta) * (t1 + t2)) + (t3 + t4) ), then annealing-tempering.
+                    return beta_temp * ( -0.5 * ( ((1.0 / beta) * (t1 + t2)) + (t3 + t4)) + log_jacobian_sigma_sqs + log_jacobian_thetas)
             
-            # prior-temper using 1/beta: -0.5 * ( ((1/beta) * (t1 + t2)) + (t3 + t4) ), then annealing-tempering.
-            return beta_temp * ( -0.5 * ( ((1.0 / beta) * (t1 + t2)) + (t3 + t4)) + log_jacobian_sigma_sqs + log_jacobian_thetas)
-        
-        
-        # need to create a helper function to let NUTS know it's a 3-variable input.
-        def init_tempered_log_prob(X, sigma_sqs_pre, thetas, beta_temp):
-            return unnormalized_log_prob(X, sigma_sqs_pre, thetas, beta_temp=beta_temp)
-        
-        # what should the initial beta_temp be?
-        beta_temp_init = logarithmic_temperature_schedule(step=0, min_temp=0.1)
-                                
-        # create our NUTS sampler with dual step-size adaptation (as the base)
-        adaptive_sampler = tfp.mcmc.DualAveragingStepSizeAdaptation(
-            inner_kernel=tfp.mcmc.NoUTurnSampler(
-                target_log_prob_fn=lambda X, sigma_sqs_pre, thetas : init_tempered_log_prob(X, sigma_sqs_pre, thetas,
-                                                                                            beta_temp=beta_temp_init), 
-                step_size=0.1),
-            num_adaptation_steps=int(0.8 * num_burnin_steps),
-            target_accept_prob=0.75)
-        
-        # wrap the above with our temperature-controlled custom kernel setup.
-        annealed_sampler = LogAnnealedNUTS(base_kernel=adaptive_sampler, 
-                                           num_steps=num_burnin_steps + num_results,
-                                           unnormalized_log_prob=unnormalized_log_prob)      
-        
-        # set up our initial state, i.e., our current state (note the softplus inverse bijection)
-        sigma_sqs_pre_init = np.full_like(a=self.sigma_sqs_init, fill_value=-5.0) # filling with something small by default.
-        sigma_sqs_pre_init[self.sigma_sqs_init > sigma_sqs_LB] = np.log(np.exp( (self.sigma_sqs_init - sigma_sqs_LB)
-                                                                                 [self.sigma_sqs_init > sigma_sqs_LB] ) - 1.0)
-        
-        # repeat the process for the theta_pre_inits
-        thetas_pre_init = np.full_like(a=self.thetas_init, fill_value=-5.0) # filling with something small by default.
-        thetas_pre_init[self.thetas_init > 0.0] = np.log(np.exp( (self.thetas_init - 0.0)[self.thetas_init > 0.0] ) - 1.0)
-        
-        # fill our initial state with our pre-transformed values
-        initial_state = [self.Xhat_init, sigma_sqs_pre_init, thetas_pre_init]
-        
-        # accelerated sampling.
-        @tf.function(autograph=True, jit_compile=True)
-        def run_nuts():
-            samples, kernel_results = tfp.mcmc.sample_chain(
-                num_results=num_results,
-                num_burnin_steps=num_burnin_steps,
-                current_state=initial_state,
-                kernel=annealed_sampler,
-                trace_fn=lambda _, pkr: pkr
-            )
-            return samples, kernel_results
-        
-        if verbose:
-            print("Starting NUTS posterior sampling ...")
-        
-        # run our samples
-        start = time.time()
-        samples, kernel_results = run_nuts()
-        end = time.time()
-
-        # how much time did it take?
-        minutes = np.round((end - start) / 60, 2)
-        if verbose: 
-            print(f"Finished sampling in {minutes} minutes.")
             
-        # package everything into a dictionary as output
-        results = {"phi1s" : self.phi1s, "phi2s" : self.phi2s, 
-                   "Xhat_init" : self.Xhat_init, 
-                   "sigma_sqs_init" : self.sigma_sqs_init, 
-                   "thetas_init" : self.thetas_init, 
-                   "I" : self.I, 
-                   "X_samps" : samples[0].numpy(), 
-                   "sigma_sqs_samps" : np.log(np.exp(samples[1].numpy()) + 1.0) + sigma_sqs_LB, 
-                   "thetas_samps" : np.log(np.exp(samples[2].numpy()) + 1.0),
-                   "kernel_results" : kernel_results,
-                   "sample_results" : samples,
-                   "minutes_elapsed" : minutes}
-        
-        # return our results package
-        return results
+            # need to create a helper function to let NUTS know it's a 3-variable input.
+            def init_tempered_log_prob(X, sigma_sqs_pre, thetas, beta_temp):
+                with tf.device('/CPU:0'):
+                    return unnormalized_log_prob(X, sigma_sqs_pre, thetas, beta_temp=beta_temp)
+            
+            # what should the initial beta_temp be?
+            beta_temp_init = logarithmic_temperature_schedule(step=0, min_temp=0.1)
+                                    
+            # create our NUTS sampler with dual step-size adaptation (as the base)
+            adaptive_sampler = tfp.mcmc.DualAveragingStepSizeAdaptation(
+                inner_kernel=tfp.mcmc.NoUTurnSampler(
+                    target_log_prob_fn=lambda X, sigma_sqs_pre, thetas : init_tempered_log_prob(X, sigma_sqs_pre, thetas,
+                                                                                                beta_temp=beta_temp_init), 
+                    step_size=0.1),
+                num_adaptation_steps=int(0.8 * num_burnin_steps),
+                target_accept_prob=0.75)
+            
+            # wrap the above with our temperature-controlled custom kernel setup.
+            annealed_sampler = LogAnnealedNUTS(base_kernel=adaptive_sampler, 
+                                            num_steps=num_burnin_steps + num_results,
+                                            unnormalized_log_prob=unnormalized_log_prob)      
+            
+            # set up our initial state, i.e., our current state (note the softplus inverse bijection)
+            sigma_sqs_pre_init = np.full_like(a=self.sigma_sqs_init, fill_value=-5.0) # filling with something small by default.
+            sigma_sqs_pre_init[self.sigma_sqs_init > sigma_sqs_LB] = np.log(np.exp( (self.sigma_sqs_init - sigma_sqs_LB)
+                                                                                    [self.sigma_sqs_init > sigma_sqs_LB] ) - 1.0)
+            
+            # repeat the process for the theta_pre_inits
+            thetas_pre_init = np.full_like(a=self.thetas_init, fill_value=-5.0) # filling with something small by default.
+            thetas_pre_init[self.thetas_init > 0.0] = np.log(np.exp( (self.thetas_init - 0.0)[self.thetas_init > 0.0] ) - 1.0)
+            
+            # fill our initial state with our pre-transformed values
+            initial_state = [self.Xhat_init, sigma_sqs_pre_init, thetas_pre_init]
+            
+            # accelerated sampling.
+            @tf.function(autograph=True, jit_compile=True)
+            def run_nuts():
+                with tf.device('/CPU:0'):
+                    samples, kernel_results = tfp.mcmc.sample_chain(
+                        num_results=num_results,
+                        num_burnin_steps=num_burnin_steps,
+                        current_state=initial_state,
+                        kernel=annealed_sampler,
+                        trace_fn=lambda _, pkr: pkr
+                    )
+                    return samples, kernel_results
+                
+            if verbose:
+                print("Starting NUTS posterior sampling ...")
+            
+            # run our samples
+            start = time.time()
+            samples, kernel_results = run_nuts()
+            end = time.time()
+
+            # how much time did it take?
+            minutes = np.round((end - start) / 60, 2)
+            if verbose: 
+                print(f"Finished sampling in {minutes} minutes.")
+                
+            # package everything into a dictionary as output
+            results = {"phi1s" : self.phi1s, "phi2s" : self.phi2s, 
+                    "Xhat_init" : self.Xhat_init, 
+                    "sigma_sqs_init" : self.sigma_sqs_init, 
+                    "thetas_init" : self.thetas_init, 
+                    "I" : self.I, 
+                    "X_samps" : samples[0].numpy(), 
+                    "sigma_sqs_samps" : np.log(np.exp(samples[1].numpy()) + 1.0) + sigma_sqs_LB, 
+                    "thetas_samps" : np.log(np.exp(samples[2].numpy()) + 1.0),
+                    "kernel_results" : kernel_results,
+                    "sample_results" : samples,
+                    "minutes_elapsed" : minutes}
+            
+            # return our results package
+            return results
     
     
     '''
@@ -466,29 +473,29 @@ class MAGI_v2:
     '''
     # adds in 2^discret - 1 evenly-spaced timesteps between consecutive observations
     def _discretize(self, ts_obs, X_obs, discretization):
-        
-        # making sure dimensions work out
-        ts_obs = ts_obs.flatten()
-        assert ts_obs.shape[0] == X_obs.shape[0],\
-        "Please make sure there are equal numbers of observations in ts_obs and X_obs."
-        
-        # how many points do we want to insert?
-        N, D = X_obs.shape
-        N_discret = (2 ** discretization) * (N-1) + 1
-        I = np.full(shape=(N_discret,), fill_value=np.nan)
-        X_obs_discret = np.full(shape=(N_discret, D), fill_value=np.nan)
-        
-        # put in evenly-spaced timesteps for I
-        I[::(2 ** discretization)] = ts_obs
-        indices = np.arange(len(I))
-        I = np.interp(x=indices, xp=indices[~np.isnan(I)], fp=I[~np.isnan(I)])
-        I = I.reshape(-1, 1) # force into column for TFP compatibility
-        
-        # fill with our observed values
-        X_obs_discret[::(2 ** discretization)] = X_obs
-        
-        # return both the discretized timesteps + data matrix.
-        return I, X_obs_discret
+        with tf.device('/CPU:0'):
+            # making sure dimensions work out
+            ts_obs = ts_obs.flatten()
+            assert ts_obs.shape[0] == X_obs.shape[0],\
+            "Please make sure there are equal numbers of observations in ts_obs and X_obs."
+            
+            # how many points do we want to insert?
+            N, D = X_obs.shape
+            N_discret = (2 ** discretization) * (N-1) + 1
+            I = np.full(shape=(N_discret,), fill_value=np.nan)
+            X_obs_discret = np.full(shape=(N_discret, D), fill_value=np.nan)
+            
+            # put in evenly-spaced timesteps for I
+            I[::(2 ** discretization)] = ts_obs
+            indices = np.arange(len(I))
+            I = np.interp(x=indices, xp=indices[~np.isnan(I)], fp=I[~np.isnan(I)])
+            I = I.reshape(-1, 1) # force into column for TFP compatibility
+            
+            # fill with our observed values
+            X_obs_discret[::(2 ** discretization)] = X_obs
+            
+            # return both the discretized timesteps + data matrix.
+            return I, X_obs_discret
         
         
     '''
