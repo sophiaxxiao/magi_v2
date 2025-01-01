@@ -1,0 +1,23 @@
+nohup: ignoring input
+2024-12-31 19:39:10.575935: I tensorflow/core/util/port.cc:153] oneDNN custom operations are on. You may see slightly different numerical results due to floating-point round-off errors from different computation orders. To turn them off, set the environment variable `TF_ENABLE_ONEDNN_OPTS=0`.
+2024-12-31 19:39:10.594082: E external/local_xla/xla/stream_executor/cuda/cuda_fft.cc:485] Unable to register cuFFT factory: Attempting to register factory for plugin cuFFT when one has already been registered
+2024-12-31 19:39:10.615356: E external/local_xla/xla/stream_executor/cuda/cuda_dnn.cc:8454] Unable to register cuDNN factory: Attempting to register factory for plugin cuDNN when one has already been registered
+2024-12-31 19:39:10.621326: E external/local_xla/xla/stream_executor/cuda/cuda_blas.cc:1452] Unable to register cuBLAS factory: Attempting to register factory for plugin cuBLAS when one has already been registered
+2024-12-31 19:39:10.635644: I tensorflow/core/platform/cpu_feature_guard.cc:210] This TensorFlow binary is optimized to use available CPU instructions in performance-critical operations.
+To enable the following instructions: AVX2 AVX512F AVX512_VNNI FMA, in other operations, rebuild TensorFlow with the appropriate compiler flags.
+2024-12-31 19:39:11.837674: W tensorflow/compiler/tf2tensorrt/utils/py_utils.cc:38] TF-TRT Warning: Could not find TensorRT
+2024-12-31 19:39:14.275877: E external/local_xla/xla/stream_executor/cuda/cuda_driver.cc:266] failed call to cuInit: CUDA_ERROR_NO_DEVICE: no CUDA-capable device is detected
+2024-12-31 19:39:14.275987: I external/local_xla/xla/stream_executor/cuda/cuda_diagnostics.cc:135] retrieving CUDA diagnostic information for host: zuber
+2024-12-31 19:39:14.276001: I external/local_xla/xla/stream_executor/cuda/cuda_diagnostics.cc:142] hostname: zuber
+2024-12-31 19:39:14.276124: I external/local_xla/xla/stream_executor/cuda/cuda_diagnostics.cc:166] libcuda reported version is: 530.30.2
+2024-12-31 19:39:14.276149: I external/local_xla/xla/stream_executor/cuda/cuda_diagnostics.cc:170] kernel reported version is: 530.30.2
+2024-12-31 19:39:14.276169: I external/local_xla/xla/stream_executor/cuda/cuda_diagnostics.cc:249] kernel version seems to match DSO: 530.30.2
+Fitting hparams for 4 components:   0%|          | 0/1000 [00:00<?, ?it/s]WARNING:tensorflow:From /local/scratch/sxxiao/.venv_magi/lib/python3.10/site-packages/tensorflow_probability/python/distributions/distribution.py:342: calling GaussianProcess.__init__ (from tensorflow_probability.python.distributions.gaussian_process) with jitter is deprecated and will be removed after 2021-05-10.
+Instructions for updating:
+`jitter` is deprecated; please use `marginal_fn` directly.
+WARNING: All log messages before absl::InitializeLog() is called are written to STDERR
+I0000 00:00:1735691964.558552 1326559 service.cc:146] XLA service 0x55fc0befc2f0 initialized for platform Host (this does not guarantee that XLA will be used). Devices:
+I0000 00:00:1735691964.558742 1326559 service.cc:154]   StreamExecutor device (0): Host, Default Version
+2024-12-31 19:39:25.012459: I tensorflow/compiler/mlir/tensorflow/utils/dump_mlir_util.cc:268] disabling MLIR crash reproducer, set env var `MLIR_CRASH_REPRODUCER_DIRECTORY` to enable.
+I0000 00:00:1735691976.315472 1326559 device_compiler.h:188] Compiled cluster using XLA!  This line is logged at most once for the lifetime of the process.
+Fitting hparams for 4 components:   0%|          | 1/1000 [00:32<9:03:01, 32.61s/it]Fitting hparams for 4 components:   0%|          | 2/1000 [00:41<5:09:33, 18.61s/it]Fitting hparams for 4 components:   0%|          | 3/1000 [00:50<3:59:42, 14.43s/it]
